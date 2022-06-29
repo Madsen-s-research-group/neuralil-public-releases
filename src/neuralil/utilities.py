@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2021 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,22 +16,15 @@
 import os
 import struct
 
-import numpy as onp
-import scipy as sp
-import scipy.integrate
-import scipy.stats
-
 import flax
 import flax.traverse_util
 import jax
 import jax.numpy as jnp
 import jax.random
 
-# This module contains miscellaneous utilities used throughout the code.
+# This module containst miscellaneous utilities used throughout the code.
 
-__all__ = [
-    "draw_urandom_int32", "create_array_shuffler", "create_gp_activation"
-]
+__all__ = ["draw_urandom_int32", "create_array_shuffler"]
 
 
 def draw_urandom_int32():
@@ -73,8 +66,7 @@ def update_energy_offset(params, offset):
     unfrozen = flax.serialization.to_state_dict(params)
     flat_params = {
         "/".join(k): v
-        for k,
-        v in flax.traverse_util.flatten_dict(unfrozen).items()
+        for k, v in flax.traverse_util.flatten_dict(unfrozen).items()
     }
     flat_params["params/denormalizer/bias"] -= offset
     unfrozen = flax.traverse_util.unflatten_dict(
@@ -82,46 +74,3 @@ def update_energy_offset(params, offset):
          for k, v in flat_params.items()}
     )
     return flax.serialization.from_state_dict(params, unfrozen)
-
-
-def create_gp_activation(original_function):
-    """Create a shifted and scaled Gaussian-Poincaré activation.
-
-    Take an original differentiable activation function f(x) and compute
-    a and b so that g(x) = a*f(x) + b fulfills the condition that the expected
-    values of both g(x)**2 and g'(x)**2 are one when x is distributed
-    according to a standard Gaussian distribution.
-
-    Args:
-        original_function: A JAX-differentiable activation function of one
-            variable.
-
-    Returns:
-        A single-argument function that computes a*f(x) + b.
-    """
-    expected_f = sp.integrate.quad(
-        lambda x: sp.stats.norm.pdf(x) * original_function(x),
-        -onp.infty,
-        onp.infty
-    )[0]
-    expected_f2 = sp.integrate.quad(
-        lambda x: sp.stats.norm.pdf(x) * original_function(x)**2,
-        -onp.infty,
-        onp.infty
-    )[0]
-    scalar_derivative = jax.grad(original_function)
-    expected_fp2 = sp.integrate.quad(
-        lambda x: sp.stats.norm.pdf(x) * scalar_derivative(x)**2,
-        -onp.infty,
-        onp.infty
-    )[0]
-    scale_factor = 1. / onp.sqrt(expected_fp2)
-    quadratic_equation = [
-        1., 2. * scale_factor * expected_f, scale_factor**2 * expected_f2 - 1.
-    ]
-    offset = min(onp.roots(quadratic_equation))
-
-    def nruter(x):
-        return scale_factor * original_function(x) + offset
-
-    return nruter

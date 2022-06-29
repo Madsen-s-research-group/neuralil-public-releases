@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2021 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2021 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import jax.nn
 import jax.numpy as jnp
 import jax.random
 import jax.tree_util
-import flax
 import optax
 import tqdm
 
@@ -108,14 +107,11 @@ def create_one_cycle_minimizer(
     )
     # Integrate the training schedule in the optimizer.
     # Note the minus sign, required for gradient **descent**.
-    # AdamW with training schedule
     optimizer = optax.chain(
         optax.scale_by_adam(),
-        optax.add_decayed_weights(1e-4),
         optax.scale_by_schedule(training_schedule),
         optax.scale(-1.)
     )
-
     return optimizer
 
 
@@ -130,11 +126,8 @@ def reset_one_cycle_minimizer(optimizer_state):
         beginning of the cycle.
     """
     return type(optimizer_state)(
-        [
-            optax.ScaleByScheduleState(0)
-            if isinstance(state, optax.ScaleByScheduleState) else state
-            for state in optimizer_state
-        ]
+        [optimizer_state[0], optax.ScaleByScheduleState(0)] +
+        list(optimizer_state[2:])
     )
 
 
@@ -193,25 +186,7 @@ class _BatchedIterator:
         raise StopIteration
 
 
-def calc_non_orthogonality(model_params):
-    """Return the total deviation from non-orthogonality of the model parameters.
-
-    Only the central layers of the core model are taken into account.
-    """
-    nruter = 0.
-    for layer in model_params["params"]["core_model"]:
-        if "Stage" in layer:
-            landscape = (model_params["params"]["core_model"][layer]["kernel"])
-            if landscape.shape[0] > landscape.shape[1]:
-                landscape = landscape.T
-            dot_products = landscape @ landscape.T
-            nruter += ((jnp.eye(dot_products.shape[0]) - dot_products)**2).sum()
-    return nruter
-
-
-def create_training_step(
-    model, optimizer, calc_loss_contribution, non_orthogonality_penalty=0.
-):
+def create_training_step(model, optimizer, calc_loss_contribution):
     """Create a function that takes care of a single training step.
 
     Args:
@@ -222,10 +197,6 @@ def create_training_step(
             the order (pred_energy, pred_forces, obs_energy, obs_forces),
             and return a single scalar. The total loss will be computed as
             the mean value among all points in a batch.
-        non_orthogonality_penalty: This factor is multiplied by the sum of
-            the total square deviations from orthogonality of the weight
-            matrices of the internal layers and added to the loss, in order to
-            promote orthogonality.
 
     Returns:
         A function that will compute the loss and its gradient and update the
@@ -282,18 +253,15 @@ def create_training_step(
                     pred_energy, pred_forces, obs_energy, obs_forces
                 )
 
-            return (
-                jnp.mean(
-                    jax.vmap(jax.checkpoint(invoke_loss_contribution))(
-                        positions_batch,
-                        types_batch,
-                        cells_batch,
-                        energies_batch,
-                        forces_batch
-                    ),
-                    axis=0
-                ) +
-                calc_non_orthogonality(model_params) * non_orthogonality_penalty
+            return jnp.mean(
+                jax.vmap(jax.checkpoint(invoke_loss_contribution))(
+                    positions_batch,
+                    types_batch,
+                    cells_batch,
+                    energies_batch,
+                    forces_batch
+                ),
+                axis=0
             )
 
         calc_loss_and_grad = jax.value_and_grad(calc_loss)
@@ -316,7 +284,7 @@ def create_training_epoch(
     n_batch,
     training_step_driver,
     rng,
-    progress_bar=True,
+    progress_bar=True
 ):
     """Create a driver for a training epoch.
 
@@ -386,10 +354,7 @@ def create_training_epoch(
                     cells_batch, energies_batch, forces_batch
                 )
                 if progress_bar:
-                    iterator.set_postfix(
-                        loss=loss,
-                        non_orth=calc_non_orthogonality(model_params)
-                    )
+                    iterator.set_postfix(loss=loss)
 
         training_epoch.epoch += 1
         return (optimizer_state, model_params)

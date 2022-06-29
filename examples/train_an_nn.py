@@ -1,11 +1,15 @@
 #!/usr/bin/env python
+"""
+    This example script trains a NeuralIL model on prepared training and validation data.
+"""
 
 import datetime
-import pickle
-import json
 import pathlib
+import pickle
 import sys
 
+import ase
+import ase.db
 import flax
 import flax.jax_utils
 import flax.serialization
@@ -18,27 +22,26 @@ import tqdm.auto
 from neuralil.bessel_descriptors import (
     PowerSpectrumGenerator, get_max_number_of_neighbors
 )
-from neuralil.model import Core, NeuralILModelInfo, NeuralILwithMorse
+from neuralil.model import Core, NeuralILModelInfo, NeuralIL
 from neuralil.training import *
 from neuralil.utilities import *
 
 # Predefined parameters for this run.
-TRAINING_FRACTION = .9
-R_CUT = 3.5
-N_MAX = 4
+R_CUT = 5.5
+N_MAX = 5
 EMBED_D = 2
 
-N_EPOCHS = 501
+N_EPOCHS = 5
 N_BATCH = 8
 N_EVAL_BATCH = 32
 
-LOG_COSH_PARAMETER = 1e1  # In angstrom / eV
+LOG_COSH_PARAMETER = 10e0  # In angstrom / eV
 
-MAX_LEARNING_RATE = 1e-2
-MIN_LEARNING_RATE = 1e-3
-FIN_LEARNING_RATE = 1e-5
+MAX_LEARNING_RATE = 3e-2
+MIN_LEARNING_RATE = 3e-3
+FIN_LEARNING_RATE = 3e-4
 
-CORE_WIDTHS = [64, 32, 16, 16, 16]
+CORE_WIDTHS = [256, 128, 64, 32, 16, 16, 16]
 
 # Generate a random seed and the associated
 run_seed = draw_urandom_int32()
@@ -49,68 +52,51 @@ rng = jax.random.PRNGKey(run_seed)
 # Create a map from element names to integers. They must start at zero
 # and be contiguous. They must also be consistent between the training
 # and inference phases. Sorting the element names alphabetically is an
-# easy and reasonable choice. Naturally, the set of elements can be
-# extracted from the configurations themselves if this step is deferred.
-sorted_elements = sorted(["C", "H", "O", "N"])
+# easy and reasonable choice.
+sorted_elements = sorted(["O", "Sr", "Ti"])
 symbol_map = {s: i for i, s in enumerate(sorted_elements)}
 n_types = len(symbol_map)
 
-# Read the data from a JSON file. In this case it is a custom design,
-# but an ASE database is another common choice.
-cells = []
+# Read the data from numpy files
 positions = []
+types = []
+cells = []
 energies = []
 forces = []
-print("- Reading the JSON file")
-with open((pathlib.Path(__file__).parent / "configurations.json").resolve(),
-          "r") as json_f:
-    for line in json_f:
-        json_data = json.loads(line)
-        cells.append(jnp.diag(jnp.array(json_data["Cell-Size"])))
-        positions.append(json_data["Positions"])
-        energies.append(json_data["Energy"])
-        forces.append(json_data["Forces"])
-print("- Done")
-n_configurations = len(positions)
+print("- Reading from npy")
 
-# The atom types are the same in every configuration and not stored in the file.
-type_cation = ["N", "H", "H", "H", "C", "H", "H", "C", "H", "H", "H"]
-type_anion = ["N", "O", "O", "O"]
-n_pair = len(positions[0]) // (len(type_anion) + len(type_cation))
-types = n_pair * type_cation + n_pair * type_anion
-unique_types = sorted(set(types))
-types = [[symbol_map[i] for i in types]] * n_configurations
+DATA_DIR = pathlib.Path(pathlib.Path(pathlib.Path.cwd() / "datasets"))
+TRAIN_LABEL = str(DATA_DIR / "training_nnff1" / "nnff1_train")
+cells_train = jnp.load(TRAIN_LABEL + '_cells.npy')
+positions_train = jnp.load(TRAIN_LABEL + '_positions.npy')
+types_train = jnp.load(TRAIN_LABEL + '_types.npy')
+energies_train = jnp.load(TRAIN_LABEL + '_energies.npy') * 2.
+forces_train = jnp.load(TRAIN_LABEL + '_forces.npy')
+N_TRAIN = positions_train.shape[0]
+
+VAL_LABEL = str(DATA_DIR / "validation_nnff1" / "nnff1_val")
+cells_validate = jnp.load(VAL_LABEL + '_cells.npy')
+positions_validate = jnp.load(VAL_LABEL + '_positions.npy')
+types_validate = jnp.load(VAL_LABEL + '_types.npy')
+energies_validate = jnp.load(VAL_LABEL + '_energies.npy') * 2.
+forces_validate = jnp.load(VAL_LABEL + '_forces.npy')
+N_VALIDATE = positions_validate.shape[0]
+
+print("- Done")
 
 # Shuffle the data.
+n_configurations = positions_train.shape[0] + positions_validate.shape[0]
 rng, shuffler_rng = jax.random.split(rng)
 shuffle = create_array_shuffler(shuffler_rng)
-cells = shuffle(cells)
-positions = shuffle(positions)
-energies = shuffle(energies)
-types = shuffle(types)
-forces = shuffle(forces)
 
-# Extract training and validation subsets.
-n_train = round(n_configurations * TRAINING_FRACTION)
-n_validate = n_configurations - n_train
-
-print(f"- {n_configurations} configurations are available")
-print(f"\t- {n_train} will be used for training")
-print(f"\t- {n_validate} will be used for validation")
-
-
-def split_array(in_array):
-    "Split an array in training and validation sections."
-    return jnp.split(in_array, (n_train, n_train + n_validate))[:2]
-
-
-cells_train, cells_validate = split_array(cells)
-positions_train, positions_validate = split_array(positions)
-types_train, types_validate = split_array(types)
-energies_train, energies_validate = split_array(energies)
-forces_train, forces_validate = split_array(forces)
+print(f"- {n_configurations} configurations were loaded")
+print(f"\t- {N_TRAIN} will be used for training")
+print(f"\t- {N_VALIDATE} will be used for validation")
 
 # Compute the maximum number of neighbors across all configurations.
+positions = jnp.concatenate((positions_train, positions_validate), axis=0)
+types = jnp.concatenate((types_train, types_validate), axis=0)
+cells = jnp.concatenate((cells_train, cells_validate), axis=0)
 max_neighbors = max(
     [
         get_max_number_of_neighbors(p, t, R_CUT, c) for p,
@@ -129,7 +115,7 @@ descriptor_generator = PowerSpectrumGenerator(
 # Create the model. The number and kind of parameters is completely dependent
 # on the kind of model used.
 core_model = Core(CORE_WIDTHS)
-dynamics_model = NeuralILwithMorse(
+dynamics_model = NeuralIL(
     n_types,
     EMBED_D,
     R_CUT,
@@ -140,7 +126,7 @@ dynamics_model = NeuralILwithMorse(
 
 # Create the minimizer.
 optimizer = create_one_cycle_minimizer(
-    n_train // N_BATCH, MIN_LEARNING_RATE, MAX_LEARNING_RATE, FIN_LEARNING_RATE
+    N_TRAIN // N_BATCH, MIN_LEARNING_RATE, MAX_LEARNING_RATE, FIN_LEARNING_RATE
 )
 
 # The model and the optimizer are stateless objects. Initialize the associated
@@ -211,7 +197,7 @@ validation_step = create_validation_step(
     N_EVAL_BATCH
 )
 
-PICKLE_FILE = f"model_params_neuralil_{instance_code}.pickle"
+PICKLE_FILE = f"model_params_{instance_code}.pickle"
 
 min_mae = jnp.inf
 min_rmse = jnp.inf
@@ -249,11 +235,11 @@ for i_epoch in range(N_EPOCHS):
         specific_info=None
     )
 
-    # Save the state only if the validation RMSE is minimal.
+    # Save the state only if the validation MAE is minimal.
     if mae < min_mae:
-        min_mae = mae
-    if rmse < min_rmse:
         with open(PICKLE_FILE, "wb") as f:
             print("- Saving the most recent state")
             pickle.dump(model_info, f, protocol=5)
+        min_mae = mae
+    if rmse < min_rmse:
         min_rmse = rmse

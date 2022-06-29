@@ -14,12 +14,14 @@ The original version can be found in the supporting information of the article. 
 
 ## Quick start
 
-Two example training scripts are provided in the `examples/` subdirectory:
+Three example scripts are provided in the `examples/` subdirectory:
 
-- `train_an_nn.py`, which uses parameters similar to those in the article.
+- `train_an_nn.py`: train a model on selected SrTiO3(110) surface structures.
+- `evaluate_a_poscar.py`: demonstrate how to evaluate the energy of a SrTiO3(110) surface structure provided as a POSCAR with a trained model.
+- `evaluate_a_dataset.py`: demonstrate the evaluation of a dataset of structures, calculating energies and forces with a trained model and plotting the results.
 
-- `train_snn.py`, which removes the LayerNorm in favor of the principles of  [bidirectionally self-normalizing neural networks](https://arxiv.org/abs/2006.12169), keeping the weights matrices pseudo-orthogonal and changing the activation functions to be Gaussian-Poincaré normalized.
+The required data is available in subdirectories:
 
-The set of parameters resulting from running the first script for 300 epochs is also included.
-
-A third example script, `md_example`, shows how to use the ASE calculator interface for inference, in particular to run a simple molecular dynamics simulation.
+- `examples/datasets/` contains the training and validation data used in `training.py` and `evaluate_a_dataset.py`, separated into *.npy files.
+- `examples/poscars/` contains the POSCAR of a SrTiO3(110) surface structure that is evaluated in `evaluate_a_poscar.py`.
+- `examples/trained_models/` contains a model trained over 500 epochs as demonstrated in `train_an_nn.py`.

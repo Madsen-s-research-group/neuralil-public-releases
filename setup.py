@@ -1,4 +1,4 @@
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2021 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from setuptools import setup, find_packages
+from distutils.core import setup
+
+from setuptools import find_packages
 
 setup(
     name="NeuralIL",
-    version="0.5",
+    version="0.4",
     description="A Differentiable Neural-Network Force Field",
     author="The NeuralIL contributors",
     author_email="jesus.carrete.montana@tuwien.ac.at",
