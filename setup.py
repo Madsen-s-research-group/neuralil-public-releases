@@ -1,4 +1,4 @@
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="NeuralIL",
-    version="0.5",
+    version="0.6.uncertainties",
     description="A Differentiable Neural-Network Force Field",
     author="The NeuralIL contributors",
     author_email="jesus.carrete.montana@tuwien.ac.at",
@@ -27,11 +27,16 @@ setup(
         "numpy",
         "scipy",
         "tqdm",
+        "colorama",
         "matplotlib",
         "ase",
-        "jax",
-        "jaxlib",
-        "flax",
-        "optax"
-    ]
+        "jax==0.3.21",
+        "jaxlib==0.3.20",
+        "flax==0.6.3",
+        "optax",
+        "learned_optimization",
+        "h5py",
+        "MDAnalysis",
+        "jax_md>=0.2.5",
+    ],
 )

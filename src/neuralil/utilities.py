@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,21 +16,22 @@
 import os
 import struct
 
-import numpy as onp
-import scipy as sp
-import scipy.integrate
-import scipy.stats
-
 import flax
 import flax.traverse_util
 import jax
 import jax.numpy as jnp
 import jax.random
+import numpy as onp
+import scipy as sp
+import scipy.integrate
+import scipy.stats
 
 # This module contains miscellaneous utilities used throughout the code.
 
 __all__ = [
-    "draw_urandom_int32", "create_array_shuffler", "create_gp_activation"
+    "draw_urandom_int32",
+    "create_array_shuffler",
+    "create_gp_activation",
 ]
 
 
@@ -51,37 +52,11 @@ def create_array_shuffler(rng):
         be the same for the same input. Arrays of the same length will be sorted
         correlatively.
     """
+
     def nruter(in_array):
         return jax.random.permutation(rng, jnp.asarray(in_array))
 
     return nruter
-
-
-def update_energy_offset(params, offset):
-    """Update the bias of the last layer of a model.
-    
-    This is normaly done so that a model trained on forces uses the right
-    origin of energies.
-
-    Args:
-        params: The FrozenDict containing the parameters of the model.
-        offset: The energy per atom to be removed from the bias.
-
-    Returns:
-        An updated version of the 'params' FrozenDict.
-    """
-    unfrozen = flax.serialization.to_state_dict(params)
-    flat_params = {
-        "/".join(k): v
-        for k,
-        v in flax.traverse_util.flatten_dict(unfrozen).items()
-    }
-    flat_params["params/denormalizer/bias"] -= offset
-    unfrozen = flax.traverse_util.unflatten_dict(
-        {tuple(k.split("/")): v
-         for k, v in flat_params.items()}
-    )
-    return flax.serialization.from_state_dict(params, unfrozen)
 
 
 def create_gp_activation(original_function):
@@ -102,22 +77,24 @@ def create_gp_activation(original_function):
     expected_f = sp.integrate.quad(
         lambda x: sp.stats.norm.pdf(x) * original_function(x),
         -onp.infty,
-        onp.infty
+        onp.infty,
     )[0]
     expected_f2 = sp.integrate.quad(
-        lambda x: sp.stats.norm.pdf(x) * original_function(x)**2,
+        lambda x: sp.stats.norm.pdf(x) * original_function(x) ** 2,
         -onp.infty,
-        onp.infty
+        onp.infty,
     )[0]
     scalar_derivative = jax.grad(original_function)
     expected_fp2 = sp.integrate.quad(
-        lambda x: sp.stats.norm.pdf(x) * scalar_derivative(x)**2,
+        lambda x: sp.stats.norm.pdf(x) * scalar_derivative(x) ** 2,
         -onp.infty,
-        onp.infty
+        onp.infty,
     )[0]
-    scale_factor = 1. / onp.sqrt(expected_fp2)
+    scale_factor = 1.0 / onp.sqrt(expected_fp2)
     quadratic_equation = [
-        1., 2. * scale_factor * expected_f, scale_factor**2 * expected_f2 - 1.
+        1.0,
+        2.0 * scale_factor * expected_f,
+        scale_factor**2 * expected_f2 - 1.0,
     ]
     offset = min(onp.roots(quadratic_equation))
 

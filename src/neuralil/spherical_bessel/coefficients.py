@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ class SphericalBesselCoefficients:
     Raises:
         ValueError if n_max is negative.
     """
+
     def __init__(self, n_max: int, dtype: np.dtype = np.float32):
         if n_max < 0:
             raise ValueError("n_max cannot be negative")
@@ -49,19 +50,23 @@ class SphericalBesselCoefficients:
         # Create the tables to store the coefficients. Just like for the
         # roots, we store them regular arrays for convenience but only use
         # half of each array. Non initialized elements are set to NaN.
-        self.c_1 = (np.nan * np.ones((self.__n_max + 1, self.__n_max + 1)
-                                    )).astype(dtype)
-        self.c_2 = (np.nan * np.ones((self.__n_max + 1, self.__n_max + 1)
-                                    )).astype(dtype)
+        self.c_1 = (
+            np.nan * np.ones((self.__n_max + 1, self.__n_max + 1))
+        ).astype(dtype)
+        self.c_2 = (
+            np.nan * np.ones((self.__n_max + 1, self.__n_max + 1))
+        ).astype(dtype)
         for order in range(self.__n_max + 1):
             function = jax.jit(functions.create_j_l(order + 1, dtype))
-            u_0 = self.roots.table[order, :self.__n_max - order + 1]
-            u_1 = self.roots.table[order, 1:self.__n_max - order + 2]
-            coeff = np.sqrt(2. / (u_0 * u_0 + u_1 * u_1))
-            self.c_1[order, :self.__n_max - order +
-                     1] = u_1 / function(u_0) * coeff
-            self.c_2[order, :self.__n_max - order +
-                     1] = u_0 / function(u_1) * coeff
+            u_0 = self.roots.table[order, : self.__n_max - order + 1]
+            u_1 = self.roots.table[order, 1 : self.__n_max - order + 2]
+            coeff = np.sqrt(2.0 / (u_0 * u_0 + u_1 * u_1))
+            self.c_1[order, : self.__n_max - order + 1] = (
+                u_1 / function(u_0) * coeff
+            )
+            self.c_2[order, : self.__n_max - order + 1] = (
+                u_0 / function(u_1) * coeff
+            )
 
 
 if __name__ == "__main__":

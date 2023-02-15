@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ class SphericalBesselRoots:
     Raises:
         ValueError if n_max is negative.
     """
+
     def __init__(self, n_max: int, dtype: np.dtype = np.float32):
         if n_max < 0:
             raise ValueError("n_max cannot be negative")
@@ -69,13 +70,16 @@ class SphericalBesselRoots:
             for n in range(self.n_max + 2 - order):
                 left = self.table[order - 1, n]
                 right = self.table[order - 1, n + 1]
-                self.table[order, n] = sp.optimize.brentq(function, left, right)
+                self.table[order, n] = sp.optimize.brentq(
+                    function, left, right
+                )
 
 
 if __name__ == "__main__":
     # Time the calculation and check the maximum error in the roots.
     import datetime
     import timeit
+
     test_n_max = 140
 
     print(f"Building the table of roots up to n_max={test_n_max}")
@@ -86,7 +90,7 @@ if __name__ == "__main__":
 
     print("Computing the maximum error of the roots")
     start = timeit.default_timer()
-    max_error = 0.
+    max_error = 0.0
     for order in range(0, test_n_max + 1):
         function = functions.create_j_l(order)
         for n in range(test_n_max + 2 - order):

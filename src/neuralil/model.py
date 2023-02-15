@@ -1,4 +1,4 @@
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import itertools
 from dataclasses import dataclass
 from typing import Any, Callable, ClassVar, Sequence
 
@@ -26,6 +27,13 @@ from flax.core.frozen_dict import FrozenDict
 from neuralil.bessel_descriptors import center_at_atoms, center_at_points
 
 
+def pairwise(iterable):
+    """Reimplementation of Python 3.10's itertools.pairwise."""
+    a, b = itertools.tee(iterable)
+    next(b, None)
+    return zip(a, b)
+
+
 @jax.custom_jvp
 def _sqrt(x):
     return jnp.sqrt(x)
@@ -33,22 +41,22 @@ def _sqrt(x):
 
 @_sqrt.defjvp
 def _sqrt_jvp(primals, tangents):
-    x, = primals
-    xdot, = tangents
+    (x,) = primals
+    (xdot,) = tangents
     primal_out = _sqrt(x)
-    tangent_out = jnp.where(x == 0., 0., 0.5 / primal_out) * xdot
+    tangent_out = jnp.where(x == 0.0, 0.0, 0.5 / primal_out) * xdot
     return (primal_out, tangent_out)
 
 
 def _aux_function_f(t):
     "First auxiliary function used in the definition of the smooth bump."
-    return jnp.where(t > 0., jnp.exp(-1. / jnp.where(t > 0., t, 1.)), 0.)
+    return jnp.where(t > 0.0, jnp.exp(-1.0 / jnp.where(t > 0.0, t, 1.0)), 0.0)
 
 
 def _aux_function_g(t):
     "Second auxiliary function used in the definition of the smooth bump."
     f_of_t = _aux_function_f(t)
-    return f_of_t / (f_of_t + _aux_function_f(1. - t))
+    return f_of_t / (f_of_t + _aux_function_f(1.0 - t))
 
 
 def smooth_cutoff(r, r_switch, r_cut):
@@ -62,7 +70,7 @@ def smooth_cutoff(r, r_switch, r_cut):
     r_switch2 = r_switch * r_switch
     r_cut2 = r_cut * r_cut
 
-    return 1. - _aux_function_g((r * r - r_switch2) / (r_cut2 - r_switch2))
+    return 1.0 - _aux_function_g((r * r - r_switch2) / (r_cut2 - r_switch2))
 
 
 def calc_morse_mixing_radii(radii, abd_probe, abd_source):
@@ -97,29 +105,29 @@ def calc_morse_mixing_radii(radii, abd_probe, abd_source):
     b_source = abd_source[:, 1][jnp.newaxis, :]
     d_source = abd_source[:, 2][jnp.newaxis, :]
     return (
-        a_source * radii +
-        .25 * jnp.log(a_probe * d_probe / (a_source * d_source)) + .5 *
-        (a_probe * b_probe - a_source * b_source)
-    ) / (
-        a_probe + a_source
-    )
+        a_source * radii
+        + 0.25 * jnp.log(a_probe * d_probe / (a_source * d_source))
+        + 0.5 * (a_probe * b_probe - a_source * b_source)
+    ) / (a_probe + a_source)
 
 
-class RepulsiveMorseModel(flax.linen.Module):
-    """Trainable repulsive Morse potential with per-element parameters.
+class MorseModel(flax.linen.Module):
+    """Trainable Morse potential with per-element parameters.
 
     The potential function is parameterized as
 
-    phi(r) = d * exp(-2 * a * (r - b))
+    phi(r) = d * exponential * (exponential - 2), with
+
+    exponential = exp(-a * (r - b))
 
     multiplied by a switching function with a fixed cutoff raduzs and a
     trainable switching radius to guarantee the smoothness of the forces.
 
     The parameters (a, b, d) are extracted from a three-component embedding
     vector v as
-    a = a_min + v[0] ** 2
-    b = b_min + v[1] ** 2
-    d = d_min + v[2] ** 2
+    a = softplus(v[0])
+    b = softplus(v[1])
+    d = softplus(v[2])
     to guarantee their positivity. The interaction between two atoms, of
     elements a and b, contributes a potential energy
 
@@ -131,24 +139,19 @@ class RepulsiveMorseModel(flax.linen.Module):
     Args:
         n_types: The number of atom types in the system.
         r_cut: The cutoff radius.
-        a_min: The minimum possible value for the parameter a.
-        b_min: The minimum possible value for the parameter b.
-        d_min: The minimum possible value for the parameter d.
     """
+
     n_types: int
     r_cut: float
-    a_min: float
-    b_min: float
-    d_min: float
 
     def setup(self):
         self.switch_param = self.param(
-            "switch_param", flax.linen.initializers.lecun_normal(), (1, 1)
+            "switch_param", jax.nn.initializers.lecun_normal(), (1, 1)
         )
         self.embed = flax.linen.Embed(self.n_types, 3)
 
     def calc_atomic_energies(self, radii, probe_types, source_types):
-        """Compute the Morse repulsive contributions to the potential energy.
+        """Compute the Morse contributions to the potential energy.
 
         Two groups of atoms can be specified: the "source" atoms that take part
         in the interacions and the "probe" atoms whose energies we compute.
@@ -167,36 +170,31 @@ class RepulsiveMorseModel(flax.linen.Module):
         mask = jnp.logical_or(
             probe_types[:, jnp.newaxis] < 0, source_types[jnp.newaxis, :] < 0
         )
-        radii = radii + 2. * mask * self.r_cut
-        abd_probe = (
-            jnp.array([self.a_min, self.b_min, self.d_min])[jnp.newaxis, :] +
-            self.embed(probe_types)**2
-        )
-        abd_source = (
-            jnp.array([self.a_min, self.b_min, self.d_min])[jnp.newaxis, :] +
-            self.embed(source_types)**2
-        )
+        radii = radii + 2.0 * mask * self.r_cut
+        abd_probe = jax.nn.softplus(self.embed(probe_types))
+        abd_source = jax.nn.softplus(self.embed(source_types))
         r_morse = calc_morse_mixing_radii(radii, abd_probe, abd_source)
 
         a = abd_probe[:, 0]
         b = abd_probe[:, 1]
         d = abd_probe[:, 2]
-        contributions = (
-            d[:, jnp.newaxis] * jnp.exp(
-                -2. * a[:, jnp.newaxis] * (2. * r_morse - b[:, jnp.newaxis])
-            )
+        exponential = jnp.exp(
+            -a[:, jnp.newaxis] * (r_morse - b[:, jnp.newaxis])
         )
+        contributions = d[:, jnp.newaxis] * exponential * (exponential - 2.0)
         # Zero out the contribution from the interaction of each atom with
         # itself. This trick only works with potentials that can be safely
         # evaluated at r=0.
-        contributions *= jnp.logical_not(jnp.isclose(0., radii))
+        contributions *= jnp.logical_not(jnp.isclose(0.0, radii))
         # The switching radius will always lie between r_cut / 2. and r_cut, to
         # avoid nonsensical situations.
-        r_switch = .5 * (
-            1. + jax.nn.sigmoid(jnp.squeeze(self.switch_param))
-        ) * self.r_cut
+        r_switch = (
+            0.5
+            * (1.0 + jax.nn.sigmoid(jnp.squeeze(self.switch_param)))
+            * self.r_cut
+        )
         cutoffs = smooth_cutoff(radii, r_switch, self.r_cut)
-        return .5 * (cutoffs * contributions).sum(axis=1)
+        return 0.5 * (cutoffs * contributions).sum(axis=1)
 
 
 class TrivialCore(flax.linen.Module):
@@ -214,12 +212,13 @@ class TrivialCore(flax.linen.Module):
         use_intermediate_biases: If set to False, remove the biases from the
             intermediate layers.
         kernel_init: Initializer for the weight matrices (default:
-            flax.linen.initializers.lecun_normal).
+            jax.nn.initializers.lecun_normal).
     """
+
     layer_widths: Sequence[int]
     activation_function: Callable = flax.linen.swish
     use_intermediate_biases: bool = True
-    kernel_init: Callable = flax.linen.initializers.lecun_normal()
+    kernel_init: Callable = jax.nn.initializers.lecun_normal()
 
     @flax.linen.compact
     def __call__(self, descriptors):
@@ -228,7 +227,7 @@ class TrivialCore(flax.linen.Module):
                 self.layer_widths[0],
                 use_bias=self.use_intermediate_biases,
                 kernel_init=self.kernel_init,
-                name="Inlet"
+                name="Inlet",
             )(descriptors)
         )
         for i_w, w in enumerate(self.layer_widths[1:]):
@@ -237,12 +236,13 @@ class TrivialCore(flax.linen.Module):
                     w,
                     use_bias=self.use_intermediate_biases,
                     kernel_init=self.kernel_init,
-                    name=f"Stage_{i_w + 1}"
+                    name=f"Stage_{i_w + 1}",
                 )(result)
             )
         return self.activation_function(
-            flax.linen.Dense(1, kernel_init=self.kernel_init,
-                             name="Outlet")(result)
+            flax.linen.Dense(1, kernel_init=self.kernel_init, name="Outlet")(
+                result
+            )
         )
 
 
@@ -264,6 +264,7 @@ class Core(flax.linen.Module):
         kernel_init: Initializer for the weight matrices (default:
             flax.linen.initializers.lecun_normal).
     """
+
     layer_widths: Sequence[int]
     activation_function: Callable = flax.linen.swish
     use_intermediate_biases: bool = True
@@ -275,7 +276,7 @@ class Core(flax.linen.Module):
             flax.linen.Dense(
                 self.layer_widths[0],
                 kernel_init=self.kernel_init,
-                name="Inlet"
+                name="Inlet",
             )(descriptors)
         )
         for i_w, w in enumerate(self.layer_widths[1:]):
@@ -285,14 +286,177 @@ class Core(flax.linen.Module):
                         w,
                         use_bias=self.use_intermediate_biases,
                         kernel_init=self.kernel_init,
-                        name=f"Stage_{i_w + 1}"
+                        name=f"Stage_{i_w + 1}",
                     )(result)
                 )
             )
         return self.activation_function(
-            flax.linen.Dense(1, kernel_init=self.kernel_init,
-                             name="Outlet")(result)
+            flax.linen.Dense(1, kernel_init=self.kernel_init, name="Outlet")(
+                result
+            )
         )
+
+
+class ResNetIdentity(flax.linen.Module):
+    """Identity element of a regression deep residual network.
+
+    Reference: Chen, D.; Hu, F.; Nian, G.; Yang, T.
+    Deep Residual Learning for Nonlinear Regression. Entropy 22 (2020) 193.
+
+    Args:
+        width: The number of elements of the input and output.
+        activation_function: The nonlinear activation function for each neuron,
+            which is Swish by default.
+        kernel_init: Initializer for the weight matrices (default:
+            flax.linen.initializers.lecun_normal).
+    """
+
+    width: int
+    activation_function: Callable = flax.linen.swish
+    kernel_init: Callable = jax.nn.initializers.lecun_normal()
+
+    @flax.linen.compact
+    def __call__(self, input_signals):
+        result_long = self.activation_function(
+            flax.linen.LayerNorm()(
+                flax.linen.Dense(
+                    self.width,
+                    kernel_init=self.kernel_init,
+                )(input_signals)
+            )
+        )
+        result_long = self.activation_function(
+            flax.linen.LayerNorm()(
+                flax.linen.Dense(
+                    self.width,
+                    kernel_init=self.kernel_init,
+                )(result_long)
+            )
+        )
+        result_long = flax.linen.LayerNorm()(
+            flax.linen.Dense(
+                self.width,
+                kernel_init=self.kernel_init,
+            )(result_long)
+        )
+        return self.activation_function(result_long + input_signals)
+
+
+class ResNetDense(flax.linen.Module):
+    """Dense element of a regression deep residual network.
+
+    Reference: Chen, D.; Hu, F.; Nian, G.; Yang, T.
+    Deep Residual Learning for Nonlinear Regression. Entropy 22 (2020) 193.
+
+    Args:
+        input_width: The number of elements of the input.
+        output_width: The number of elements of the output.
+        activation_function: The nonlinear activation function for each neuron,
+            which is Swish by default.
+        kernel_init: Initializer for the weight matrices (default:
+            flax.linen.initializers.lecun_normal).
+    """
+
+    input_width: int
+    output_width: int
+    activation_function: Callable = flax.linen.swish
+    kernel_init: Callable = jax.nn.initializers.lecun_normal()
+
+    @flax.linen.compact
+    def __call__(self, input_signals):
+        result_long = self.activation_function(
+            flax.linen.LayerNorm()(
+                flax.linen.Dense(
+                    self.input_width,
+                    kernel_init=self.kernel_init,
+                )(input_signals)
+            )
+        )
+        result_long = self.activation_function(
+            flax.linen.LayerNorm()(
+                flax.linen.Dense(
+                    self.input_width,
+                    kernel_init=self.kernel_init,
+                )(result_long)
+            )
+        )
+        result_long = flax.linen.Dense(
+            self.output_width,
+            kernel_init=self.kernel_init,
+        )(result_long)
+        result_short = flax.linen.Dense(
+            self.output_width,
+            kernel_init=self.kernel_init,
+        )(input_signals)
+        # Skip the last layer normalization for the outlet, where it would
+        # destroy the results.
+        if self.output_width > 1:
+            result_long = flax.linen.LayerNorm()(result_long)
+            result_short = flax.linen.LayerNorm()(result_short)
+
+        return self.activation_function(result_long + result_short)
+
+
+class ResNetCore(flax.linen.Module):
+    """Alternative to Core based on ResNet (deep network with bypasses).
+
+    This model takes the descriptors of each atom (Bessel + embedding,
+    concatenated or otherwise combined) as inputs and calculates that atom's
+    contribution to the potential energy.
+    Reference: Chen, D.; Hu, F.; Nian, G.; Yang, T.
+    Deep Residual Learning for Nonlinear Regression. Entropy 22 (2020) 193.
+    Compared to the basic Core, width-preserving layers are replaced with
+    ResNetIdentity, while other layers are replaced with ResNetDense.
+
+    Args:
+        layer_widths: The sequence of layer widths, excluding the output
+            layer, which always has a width equal to one.
+        activation_function: The nonlinear activation function for each neuron,
+            which is Swish by default.
+        kernel_init: Initializer for the weight matrices (default:
+            flax.linen.initializers.lecun_normal).
+    """
+
+    layer_widths: Sequence[int]
+    activation_function: Callable = flax.linen.swish
+    kernel_init: Callable = jax.nn.initializers.lecun_normal()
+
+    def setup(self):
+        total_widths = self.layer_widths + (1,)
+        identity_counter = 0
+        dense_counter = 0
+        res_layers = []
+        for i_width, o_width in pairwise(total_widths):
+            if i_width == o_width:
+                identity_counter += 1
+                name = f"ResNetIdentity_{identity_counter}_{i_width}"
+                res_layers.append(
+                    ResNetIdentity(
+                        i_width,
+                        self.activation_function,
+                        self.kernel_init,
+                        name=name,
+                    )
+                )
+            else:
+                dense_counter += 1
+                name = f"ResNetDense_{dense_counter}_{i_width}_to_{o_width}"
+                res_layers.append(
+                    ResNetDense(
+                        i_width,
+                        o_width,
+                        self.activation_function,
+                        self.kernel_init,
+                        name=name,
+                    )
+                )
+        self.res_layers = res_layers
+
+    def __call__(self, descriptors):
+        result = descriptors
+        for layer in self.res_layers:
+            result = layer(result)
+        return result
 
 
 class NeuralIL(flax.linen.Module):
@@ -316,6 +480,7 @@ class NeuralIL(flax.linen.Module):
             embedding vectors and creates the input descriptors for the core
             model. The default choice just concatenates them.
     """
+
     n_types: int
     embed_d: int
     r_cut: float
@@ -334,13 +499,9 @@ class NeuralIL(flax.linen.Module):
         # This linear layer centers and scales the energy after the core
         # has done its job.
         self.denormalizer = flax.linen.Dense(1)
-        # The checkpointing strategy can be reconsidered to achieve different
-        # tradeoffs between memory and CPU usage.
-        self._calc_gradient = jax.checkpoint(
-            jax.grad(self.calc_potential_energy, argnums=0)
-        )
-        self._calc_value_and_gradient = jax.checkpoint(
-            jax.value_and_grad(self.calc_potential_energy, argnums=0)
+        self._calc_gradient = jax.grad(self.calc_potential_energy, argnums=0)
+        self._calc_value_and_gradient = jax.value_and_grad(
+            self.calc_potential_energy, argnums=0
         )
 
     def calc_combined_inputs(self, positions, types, cell):
@@ -420,7 +581,7 @@ class NeuralIL(flax.linen.Module):
                 coordinates of each atom whose contribution to the energy
                 should be computed.
             some_types: The atom types of the subset of atoms, codified as
-                integers from 0 to n_types - 1. 
+                integers from 0 to n_types - 1.
             all_positions: The positions of all atoms in the system.
             all_types: The atom types, codified as integers from 0 to
                 n_types - 1.
@@ -491,7 +652,9 @@ class NeuralIL(flax.linen.Module):
             contributions to the potential energy. The second one is an
             (n_atoms, 3) vector containing all the forces.
         """
-        energy, gradient = self._calc_value_and_gradient(positions, types, cell)
+        energy, gradient = self._calc_value_and_gradient(
+            positions, types, cell
+        )
         return (energy, -gradient)
 
 
@@ -500,7 +663,7 @@ class NeuralILwithMorse(flax.linen.Module):
 
     The class does not provide a __call__ method, forcing the user to choose
     what to evaluate (forces, energies or both). This version includes a
-    repulsive Morse contribution.
+    Morse contribution.
 
     Args:
         n_types: The number of atom types in the system.
@@ -517,6 +680,7 @@ class NeuralILwithMorse(flax.linen.Module):
             embedding vectors and creates the input descriptors for the core
             model. The default choice just concatenates them.
     """
+
     n_types: int
     embed_d: int
     r_cut: float
@@ -530,23 +694,16 @@ class NeuralILwithMorse(flax.linen.Module):
     model_version: ClassVar[str] = "0.4"
 
     def setup(self):
-        # TODO: Rethink the baseline a, b and d.
-        # This model takes care of the repulsive part of the potential.
-        self.morse = RepulsiveMorseModel(
-            self.n_types, self.r_cut, 1e-2, 1e-2, 1e-2
-        )
+        # This model takes care of the Morse part of the potential.
+        self.morse = MorseModel(self.n_types, self.r_cut)
         # These neurons create the embedding vector.
         self.embed = flax.linen.Embed(self.n_types, self.embed_d)
         # This linear layer centers and scales the energy after the core
         # has done its job.
         self.denormalizer = flax.linen.Dense(1)
-        # The checkpointing strategy can be reconsidered to achieve different
-        # tradeoffs between memory and CPU usage.
-        self._calc_gradient = jax.checkpoint(
-            jax.grad(self.calc_potential_energy, argnums=0)
-        )
-        self._calc_value_and_gradient = jax.checkpoint(
-            jax.value_and_grad(self.calc_potential_energy, argnums=0)
+        self._calc_gradient = jax.grad(self.calc_potential_energy, argnums=0)
+        self._calc_value_and_gradient = jax.value_and_grad(
+            self.calc_potential_energy, argnums=0
         )
 
     def calc_combined_inputs(self, positions, types, cell):
@@ -654,7 +811,7 @@ class NeuralILwithMorse(flax.linen.Module):
                 coordinates of each atom whose contribution to the energy
                 should be computed.
             some_types: The atom types of the subset of atoms, codified as
-                integers from 0 to n_types - 1. 
+                integers from 0 to n_types - 1.
             all_positions: The positions of all atoms in the system.
             all_types: The atom types, codified as integers from 0 to
                 n_types - 1.
@@ -691,7 +848,7 @@ class NeuralILwithMorse(flax.linen.Module):
                 coordinates of each atom whose contribution to the energy
                 should be computed.
             some_types: The atom types of the subset of atoms, codified as
-                integers from 0 to n_types - 1. 
+                integers from 0 to n_types - 1.
             all_positions: The positions of all atoms in the system.
             all_types: The atom types, codified as integers from 0 to
                 n_types - 1.
@@ -762,7 +919,9 @@ class NeuralILwithMorse(flax.linen.Module):
             contributions to the potential energy. The second one is an
             (n_atoms, 3) vector containing all the forces.
         """
-        energy, gradient = self._calc_value_and_gradient(positions, types, cell)
+        energy, gradient = self._calc_value_and_gradient(
+            positions, types, cell
+        )
         return (energy, -gradient)
 
 
@@ -792,3 +951,28 @@ class NeuralILModelInfo:
     params: FrozenDict
     # Any other information this kind of model requires
     specific_info: Any
+
+
+def update_energy_offset(params, offset):
+    """Update the bias of the last layer of a model.
+
+    This is normaly done so that a model trained on forces uses the right
+    origin of energies.
+
+    Args:
+        params: The FrozenDict containing the parameters of the model.
+        offset: The energy per atom to be removed from the bias.
+
+    Returns:
+        An updated version of the 'params' FrozenDict.
+    """
+    unfrozen = flax.serialization.to_state_dict(params)
+    flat_params = {
+        "/".join(k): v
+        for k, v in flax.traverse_util.flatten_dict(unfrozen).items()
+    }
+    flat_params["params/denormalizer/bias"] -= offset
+    unfrozen = flax.traverse_util.unflatten_dict(
+        {tuple(k.split("/")): v for k, v in flat_params.items()}
+    )
+    return flax.serialization.from_state_dict(params, unfrozen)

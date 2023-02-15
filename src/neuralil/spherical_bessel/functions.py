@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
-
 import jax
 import jax.numpy as jnp
 import numpy as onp
+
+# Fixing issue https://github.com/google/jax/issues/10750 until newer jax version
+from neuralil.spherical_bessel.sinc_patch import _fixed_sinc
 
 
 def _j_0(r: jnp.ndarray) -> jnp.ndarray:
@@ -32,7 +33,7 @@ def _j_0(r: jnp.ndarray) -> jnp.ndarray:
     Returns:
         The values of the order-0 spherical Bessel function of the first kind.
     """
-    return jnp.sinc(r / jnp.pi)
+    return _fixed_sinc(r / jnp.pi)
 
 
 def _j_1(r: jnp.ndarray) -> jnp.ndarray:
@@ -47,7 +48,7 @@ def _j_1(r: jnp.ndarray) -> jnp.ndarray:
     Returns:
         The values of the order-1 spherical Bessel function of the first kind.
     """
-    return (jnp.sinc(r / jnp.pi) - jnp.cos(r)) / r
+    return (_fixed_sinc(r / jnp.pi) - jnp.cos(r)) / r
 
 
 def _calc_starting_order_Cai(order: int, r):
@@ -63,11 +64,11 @@ def _calc_starting_order_Cai(order: int, r):
         order: The order of the spherical Bessel function to be evaluated.
         r: A single value of the argument to the spherical bessel function.
     """
-    cais_m = int(onp.floor(1.83 * r**0.91 + 9.))
+    cais_m = int(onp.floor(1.83 * r**0.91 + 9.0))
     lower_bound = max(order + 1, cais_m)
     # This bound should depend on the kind of floating point used, but that
     # is not a critical point for our narrow use case.
-    upper_bound = int(onp.floor(235. + 50. * onp.sqrt(r)))
+    upper_bound = int(onp.floor(235.0 + 50.0 * onp.sqrt(r)))
     return min(lower_bound, upper_bound)
 
 
@@ -124,7 +125,7 @@ def create_j_l(order: int, dtype: onp.dtype = onp.float32):
     # Cai's original prescription is 1e-305, which works for double
     # precision but causes huge problems with the derivative. eps**2 * r
     # seems to work well, since smaller r require a smaller value.
-    initial_prefactor = onp.finfo(dtype).eps**2
+    initial_prefactor = onp.finfo(dtype).eps ** 2
 
     def j_l_Cai(r: jnp.ndarray) -> jnp.ndarray:
         """Order-l spherical Bessel function of the first kind with derivative.
@@ -169,7 +170,7 @@ def create_j_l(order: int, dtype: onp.dtype = onp.float32):
         prefactor = jnp.where(
             jnp.fabs(order_0) >= jnp.fabs(order_1),
             order_0 / minus_1,
-            order_1 / plus_1
+            order_1 / plus_1,
         )
         return (prefactor * unnormalized, prefactor * unnormalized_derivative)
 
@@ -191,22 +192,22 @@ def create_j_l(order: int, dtype: onp.dtype = onp.float32):
         r = jnp.asarray(r)
         condition = r < order
         return (
-            condition * j_l_Cai(jnp.clip(r, a_max=order))[0] +
-            (1. - condition) * j_l_upward(r)[0]
+            condition * j_l_Cai(jnp.clip(r, a_max=order))[0]
+            + (1.0 - condition) * j_l_upward(r)[0]
         )
 
     # Since the derivatives of the spherical Bessel functions are inexpensive
     # to calculate, it pays off to derine a custon jvp rule for them.
     @j_l.defjvp
     def j_l_jvp(primals, tangents):
-        r, = primals
-        r_dot, = tangents
+        (r,) = primals
+        (r_dot,) = tangents
         Cai, Cai_dot = j_l_Cai(jnp.clip(r, a_max=order))
         upward, upward_dot = j_l_upward(r)
         condition = r < order
-        primal_out = condition * Cai + (1. - condition) * upward
+        primal_out = condition * Cai + (1.0 - condition) * upward
         tangent_out = (
-            condition * Cai_dot + (1. - condition) * upward_dot
+            condition * Cai_dot + (1.0 - condition) * upward_dot
         ) * r_dot
         return primal_out, tangent_out
 
@@ -221,14 +222,14 @@ if __name__ == "__main__":
     ORDER = 10
 
     returned_function = create_j_l(ORDER, dtype=onp.float32)
-    r = jnp.linspace(1e-3, 50., num=1001)
+    r = jnp.linspace(1e-3, 50.0, num=1001)
     value = returned_function(r)
     reference = sp.special.spherical_jn(ORDER, r)
 
     plt.figure()
     plt.plot(r, value, label="value")
     plt.plot(r, reference, label="reference")
-    plt.axvline(x=ORDER, color="#666666", lw=2.)
+    plt.axvline(x=ORDER, color="#666666", lw=2.0)
     plt.ylim(reference.min(), reference.max())
     plt.xlabel("$r$")
     plt.ylabel(f"$j_{ORDER}$")
@@ -237,12 +238,14 @@ if __name__ == "__main__":
 
     derivative_function = jnp.vectorize(jax.grad(returned_function))
     derivative_value = derivative_function(r)
-    derivative_reference = scipy.special.spherical_jn(ORDER, r, derivative=True)
+    derivative_reference = scipy.special.spherical_jn(
+        ORDER, r, derivative=True
+    )
 
     plt.figure()
     plt.plot(r, derivative_value, label="derivative")
     plt.plot(r, derivative_reference, label="reference")
-    plt.axvline(x=ORDER, color="#666666", lw=2.)
+    plt.axvline(x=ORDER, color="#666666", lw=2.0)
     plt.ylim(derivative_reference.min(), derivative_reference.max())
     plt.xlabel("$r$")
     plt.ylabel(f"$j'_{ORDER}$")

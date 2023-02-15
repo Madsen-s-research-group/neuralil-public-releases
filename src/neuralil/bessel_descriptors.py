@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2022 The NeuralIL contributors
+# Copyright 2019-2023 The NeuralIL contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -47,10 +47,10 @@ def _sqrt_jvp(primals, tangents):
     The derivative of sqrt(r) is taken to be zero at r=0, which makes sense
     as long as we never deal with negative numbers.
     """
-    x, = primals
-    xdot, = tangents
+    (x,) = primals
+    (xdot,) = tangents
     primal_out = _sqrt(x)
-    tangent_out = jnp.where(x == 0., 0., 0.5 / primal_out) * xdot
+    tangent_out = jnp.where(x == 0.0, 0.0, 0.5 / primal_out) * xdot
     return (primal_out, tangent_out)
 
 
@@ -60,7 +60,7 @@ class EllChannel:
         ell: int,
         max_order: int,
         cutoff_radius: float,
-        nans_at_zero: bool = False
+        nans_at_zero: bool = False,
     ):
         """Class taking care of radial calculations for a single value of l.
 
@@ -90,12 +90,15 @@ class EllChannel:
         while True:
             self._c_1 = _coeffs.c_1[ell, :n_cols]
             self._c_2 = _coeffs.c_2[ell, :n_cols]
-            self._roots = _coeffs.roots.table[ell, :n_cols + 1]
-            if (self._c_1.size == n_cols and self._c_2.size == n_cols and
-                    self._roots.size == n_cols + 1 and
-                    jnp.all(jnp.isfinite(self._c_1)) and
-                    jnp.all(jnp.isfinite(self._c_2)) and
-                    jnp.all(self._roots > 0.)):
+            self._roots = _coeffs.roots.table[ell, : n_cols + 1]
+            if (
+                self._c_1.size == n_cols
+                and self._c_2.size == n_cols
+                and self._roots.size == n_cols + 1
+                and jnp.all(jnp.isfinite(self._c_1))
+                and jnp.all(jnp.isfinite(self._c_2))
+                and jnp.all(self._roots > 0.0)
+            ):
                 break
             table_size = 2 * _table_size + 1
             coeffs = coefficients.SphericalBesselCoefficients(table_size)
@@ -106,7 +109,7 @@ class EllChannel:
         u_sq = self._roots * self._roots
         u_1 = u_sq[0]
         u_2 = u_sq[1]
-        d_1 = 1.
+        d_1 = 1.0
 
         self._transformation = onp.eye(n_cols)
         for n in range(1, n_cols):
@@ -116,11 +119,11 @@ class EllChannel:
 
             e = (u_0 * u_2) / ((u_0 + u_1) * (u_1 + u_2))
             d_0 = d_1
-            d_1 = 1. - e / d_0
+            d_1 = 1.0 - e / d_0
             self._transformation[n, n] /= onp.sqrt(d_1)
-            self._transformation[
-                n, :] += onp.sqrt(e /
-                                  (d_1 * d_0)) * self._transformation[n - 1, :]
+            self._transformation[n, :] += (
+                onp.sqrt(e / (d_1 * d_0)) * self._transformation[n - 1, :]
+            )
 
     def __call__(self, distances: jnp.array) -> jnp.ndarray:
         """
@@ -137,12 +140,16 @@ class EllChannel:
         f_nl = (distances < self._r_c) * (
             (
                 (
-                    self._c_1[:, jnp.newaxis] * self._function(
+                    self._c_1[:, jnp.newaxis]
+                    * self._function(
                         self._roots[:-1, jnp.newaxis] * distances / self._r_c
-                    ) - self._c_2[:, jnp.newaxis] * self._function(
+                    )
+                    - self._c_2[:, jnp.newaxis]
+                    * self._function(
                         self._roots[1:, jnp.newaxis] * distances / self._r_c
                     )
-                ) / self._r_c**1.5
+                )
+                / self._r_c**1.5
             )
         )
 
@@ -245,7 +252,7 @@ def center_at_points(
     delta -= jnp.einsum(
         "ijk,kl",
         jnp.round(jnp.einsum("ijk,kl", delta, jnp.linalg.pinv(cell_size))),
-        cell_size
+        cell_size,
     )
     radius = _sqrt(jnp.sum(delta**2, axis=-1))
     return (delta, radius)
@@ -256,7 +263,7 @@ def center_at_atoms(coordinates: jnp.ndarray, cell_size: jnp.ndarray):
     delta -= jnp.einsum(
         "ijk,kl",
         jnp.round(jnp.einsum("ijk,kl", delta, jnp.linalg.pinv(cell_size))),
-        cell_size
+        cell_size,
     )
     radius = _sqrt(jnp.sum(delta**2, axis=-1))
     return (delta, radius)
@@ -288,7 +295,7 @@ def _get_max_number_of_neighbors(coordinates, types, cutoff, cell_size):
     delta -= jnp.einsum(
         "ijk,kl",
         jnp.round(jnp.einsum("ijk,kl", delta, jnp.linalg.pinv(cell_size))),
-        cell_size
+        cell_size,
     )
     distances2 = jnp.sum(delta**2, axis=2)
     n_neighbors = jnp.logical_and(types >= 0, distances2 < cutoff2).sum(axis=1)
@@ -310,6 +317,7 @@ class PowerSpectrumGenerator:
     get_max_number_of_neighbors to check this condition if needed.
     Atoms (Administratium) with the type -1 are ignored.
     """
+
     def __init__(
         self, max_order: int, cutoff: float, n_types: int, max_neighbors: int
     ):
@@ -337,7 +345,7 @@ class PowerSpectrumGenerator:
         self,
         coordinates: jnp.ndarray,
         a_types: jnp.ndarray,
-        cell_size: jnp.ndarray
+        cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
         if not isinstance(coordinates, jnp.ndarray):
             coordinates = jnp.array(coordinates.numpy())
@@ -347,15 +355,17 @@ class PowerSpectrumGenerator:
         self,
         coordinates: jnp.ndarray,
         a_types: jnp.ndarray,
-        cell_size: jnp.ndarray
+        cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
         deltas, radii = center_at_atoms(coordinates, cell_size)
         weights = jax.nn.one_hot(a_types, self._n_types)
         nruter = jax.lax.map(
             jax.checkpoint(
-                lambda args: self.
-                _process_center(args[0], args[1], a_types, weights)
-            ), (deltas, radii)
+                lambda args: self._process_center(
+                    args[0], args[1], a_types, weights
+                )
+            ),
+            (deltas, radii),
         )
         return nruter
 
@@ -364,7 +374,7 @@ class PowerSpectrumGenerator:
         all_coordinates: jnp.ndarray,
         all_types: jnp.ndarray,
         some_coordinates: jnp.array,
-        cell_size: jnp.ndarray
+        cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
         deltas, radii = center_at_points(
             all_coordinates, some_coordinates, cell_size
@@ -372,9 +382,11 @@ class PowerSpectrumGenerator:
         weights = jax.nn.one_hot(all_types, self._n_types)
         nruter = jax.lax.map(
             jax.checkpoint(
-                lambda args: self.
-                _process_center(args[0], args[1], all_types, weights)
-            ), (deltas, radii)
+                lambda args: self._process_center(
+                    args[0], args[1], all_types, weights
+                )
+            ),
+            (deltas, radii),
         )
         return nruter
 
@@ -383,7 +395,7 @@ class PowerSpectrumGenerator:
         coordinates: jnp.ndarray,
         a_types: jnp.ndarray,
         index: int,
-        cell_size: jnp.ndarray
+        cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
         return self.process_center(
             coordinates, a_types, coordinates[index], cell_size
@@ -394,7 +406,7 @@ class PowerSpectrumGenerator:
         coordinates: jnp.ndarray,
         a_types: jnp.ndarray,
         center: jnp.ndarray,
-        cell_size: jnp.ndarray
+        cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
         deltas, radii = center_at_point(
             coordinates, center, cell_size=cell_size
@@ -407,13 +419,15 @@ class PowerSpectrumGenerator:
         deltas: jnp.ndarray,
         radii: jnp.ndarray,
         a_types: jnp.ndarray,
-        weights: jnp.ndarray
+        weights: jnp.ndarray,
     ) -> jnp.ndarray:
         inner_shape = self._inner_shape
         outer_shape = self._outer_shape
-        prefactors = (2. * jnp.arange(self._n_max + 1.) + 1.) / 4. / jnp.pi
+        prefactors = (2.0 * jnp.arange(self._n_max + 1.0) + 1.0) / 4.0 / jnp.pi
 
-        neighbors = jnp.lexsort((radii, a_types < 0))[1:self._max_neighbors + 1]
+        neighbors = jnp.lexsort((radii, a_types < 0))[
+            1 : self._max_neighbors + 1
+        ]
         deltas = jnp.take(deltas, neighbors, axis=0)
         radii = jnp.take(radii, neighbors, axis=0)
         weights = jnp.take(weights, neighbors, axis=0)
@@ -434,9 +448,11 @@ class PowerSpectrumGenerator:
             delta, radius, delta_p, radius_p, gs_p = args
             denominator = radius * radius_p
             cos_theta = (delta * delta_p).sum() / (
-                jnp.where(jnp.isclose(denominator, 0.), 1., denominator)
+                jnp.where(jnp.isclose(denominator, 0.0), 1.0, denominator)
             )
-            cos_theta = jnp.where(jnp.isclose(denominator, 0.), 0., cos_theta)
+            cos_theta = jnp.where(
+                jnp.isclose(denominator, 0.0), 0.0, cos_theta
+            )
             legendre = self._angular(cos_theta)
             kernel = jnp.repeat(prefactors * legendre, self._degeneracies)
             nruter = gs_p * kernel
@@ -453,16 +469,20 @@ class PowerSpectrumGenerator:
             # yapf: enable
             return contribution
 
-        inner_function = jax.vmap(inner_function, in_axes=[None, None, 0, 0, 0])
+        inner_function = jax.vmap(
+            inner_function, in_axes=[None, None, 0, 0, 0]
+        )
 
         @jax.checkpoint
         def outer_function(delta, radius, gs):
             subtotal = jax.lax.cond(
                 radius < self._r_c,
-                lambda x: gs[:, jnp.newaxis, :] * inner_function(
-                    delta, radius, x[0], x[1], x[2]
-                ).sum(axis=0)[jnp.newaxis, :, :],
-                lambda _: jnp.zeros(outer_shape), (deltas, radii, all_gs)
+                lambda x: gs[:, jnp.newaxis, :]
+                * inner_function(delta, radius, x[0], x[1], x[2]).sum(axis=0)[
+                    jnp.newaxis, :, :
+                ],
+                lambda _: jnp.zeros(outer_shape),
+                (deltas, radii, all_gs),
             )
             return subtotal
 
@@ -527,16 +547,17 @@ if __name__ == "__main__":
             0.003456,
             0.005239,
             0.367765,
-            0.483945
+            0.483945,
         ]
     )
 
     coords = jnp.array(
         [
-            [0.00000, 0.00000, 0.00000], [1.3681827, -1.3103517, -1.3131874],
-            [-1.5151760, 1.3360077,
-             -1.3477119], [-1.3989598, -1.2973683,
-                           1.3679189], [1.2279369, 1.3400378, 1.4797429]
+            [0.00000, 0.00000, 0.00000],
+            [1.3681827, -1.3103517, -1.3131874],
+            [-1.5151760, 1.3360077, -1.3477119],
+            [-1.3989598, -1.2973683, 1.3679189],
+            [1.2279369, 1.3400378, 1.4797429],
         ]
     )
 
@@ -547,30 +568,32 @@ if __name__ == "__main__":
     DELTA = 1e-3
     coords_plus = jnp.array(
         [
-            [0.00000 + DELTA, 0.00000,
-             0.00000], [1.3681827, -1.3103517,
-                        -1.3131874], [-1.5151760, 1.3360077, -1.3477119],
-            [-1.3989598, -1.2973683,
-             1.3679189], [1.2279369, 1.3400378, 1.4797429]
+            [0.00000 + DELTA, 0.00000, 0.00000],
+            [1.3681827, -1.3103517, -1.3131874],
+            [-1.5151760, 1.3360077, -1.3477119],
+            [-1.3989598, -1.2973683, 1.3679189],
+            [1.2279369, 1.3400378, 1.4797429],
         ]
     )
     coords_minus = jnp.array(
         [
-            [0.00000 - DELTA, 0.00000,
-             0.00000], [1.3681827, -1.3103517,
-                        -1.3131874], [-1.5151760, 1.3360077, -1.3477119],
-            [-1.3989598, -1.2973683,
-             1.3679189], [1.2279369, 1.3400378, 1.4797429]
+            [0.00000 - DELTA, 0.00000, 0.00000],
+            [1.3681827, -1.3103517, -1.3131874],
+            [-1.5151760, 1.3360077, -1.3477119],
+            [-1.3989598, -1.2973683, 1.3679189],
+            [1.2279369, 1.3400378, 1.4797429],
         ]
     )
 
     atom_types = jnp.array([0] * coords.shape[0])
     processor = jax.jit(
-        lambda x: generator.process_atom(x, atom_types, 0)[0, :]
+        lambda x: generator.process_atom(x, atom_types, 0, jnp.zeros((3, 3)))[
+            0, :
+        ]
     )
     descriptors = processor(coords)
 
-    random_vector = rng.uniform(-1., 1., descriptors.shape)
+    random_vector = rng.uniform(-1.0, 1.0, descriptors.shape)
 
     @jax.curry
     @jax.jit
@@ -594,9 +617,13 @@ if __name__ == "__main__":
     print("Descriptors:", descriptors, sep="\n")
     print("Norm of the difference:", la.norm(REFERENCE - descriptors))
 
-    full_processor = jax.jit(lambda x: generator.process_data(x, atom_types))
+    full_processor = jax.jit(
+        lambda x: generator.process_data(x, atom_types, jnp.zeros((3, 3)))
+    )
     part_processor = jax.jit(
-        lambda x, i: generator.process_atom(x, atom_types, i)
+        lambda x, i: generator.process_atom(
+            x, atom_types, i, jnp.zeros((3, 3))
+        )
     )
     full = full_processor(coords)
 
@@ -604,15 +631,16 @@ if __name__ == "__main__":
         part = part_processor(coords, i_atom)
         print(
             f"process_data vs. process_atom, atom #{i_atom + 1}",
-            la.norm(part - full[i_atom])
+            la.norm(part - full[i_atom]),
         )
 
     jacobian_func = jax.jit(jax.jacrev(processor))
     jacobian_func(coords_plus)
     jacobian = jacobian_func(coords)
     print("Algorithmic Jacobian:", jacobian[..., 0, 0], sep="\n")
-    num_jacobian = (processor(coords_plus) -
-                    processor(coords_minus)) / (2. * DELTA)
+    num_jacobian = (processor(coords_plus) - processor(coords_minus)) / (
+        2.0 * DELTA
+    )
     print("Numerical Jacobian:", num_jacobian, sep="\n")
 
     print("Forces from direct VJP:")
