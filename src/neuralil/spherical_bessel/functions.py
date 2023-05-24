@@ -17,9 +17,6 @@ import jax
 import jax.numpy as jnp
 import numpy as onp
 
-# Fixing issue https://github.com/google/jax/issues/10750 until newer jax version
-from neuralil.spherical_bessel.sinc_patch import _fixed_sinc
-
 
 def _j_0(r: jnp.ndarray) -> jnp.ndarray:
     """Order-0 spherical Bessel function of the first kind.
@@ -33,7 +30,7 @@ def _j_0(r: jnp.ndarray) -> jnp.ndarray:
     Returns:
         The values of the order-0 spherical Bessel function of the first kind.
     """
-    return _fixed_sinc(r / jnp.pi)
+    return jnp.sinc(r / jnp.pi)
 
 
 def _j_1(r: jnp.ndarray) -> jnp.ndarray:
@@ -48,7 +45,7 @@ def _j_1(r: jnp.ndarray) -> jnp.ndarray:
     Returns:
         The values of the order-1 spherical Bessel function of the first kind.
     """
-    return (_fixed_sinc(r / jnp.pi) - jnp.cos(r)) / r
+    return (jnp.sinc(r / jnp.pi) - jnp.cos(r)) / r
 
 
 def _calc_starting_order_Cai(order: int, r):

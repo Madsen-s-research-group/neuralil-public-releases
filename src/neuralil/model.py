@@ -24,8 +24,6 @@ import jax.nn
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
-from neuralil.bessel_descriptors import center_at_atoms, center_at_points
-
 
 def pairwise(iterable):
     """Reimplementation of Python 3.10's itertools.pairwise."""
@@ -263,12 +261,14 @@ class Core(flax.linen.Module):
             layers wrapped in a LayerNorm.
         kernel_init: Initializer for the weight matrices (default:
             flax.linen.initializers.lecun_normal).
+        out_dim: Dimension of the model output (default: 1).
     """
 
     layer_widths: Sequence[int]
     activation_function: Callable = flax.linen.swish
     use_intermediate_biases: bool = True
     kernel_init: Callable = flax.linen.initializers.lecun_normal()
+    out_dim: int = 1
 
     @flax.linen.compact
     def __call__(self, descriptors):
@@ -291,9 +291,9 @@ class Core(flax.linen.Module):
                 )
             )
         return self.activation_function(
-            flax.linen.Dense(1, kernel_init=self.kernel_init, name="Outlet")(
-                result
-            )
+            flax.linen.Dense(
+                self.out_dim, kernel_init=self.kernel_init, name="Outlet"
+            )(result)
         )
 
 
@@ -415,14 +415,16 @@ class ResNetCore(flax.linen.Module):
             which is Swish by default.
         kernel_init: Initializer for the weight matrices (default:
             flax.linen.initializers.lecun_normal).
+        out_dim: Dimension of the model output (default: 1).
     """
 
     layer_widths: Sequence[int]
     activation_function: Callable = flax.linen.swish
     kernel_init: Callable = jax.nn.initializers.lecun_normal()
+    out_dim: int = 1
 
     def setup(self):
-        total_widths = self.layer_widths + (1,)
+        total_widths = self.layer_widths + (self.out_dim,)
         identity_counter = 0
         dense_counter = 0
         res_layers = []
@@ -791,9 +793,11 @@ class NeuralILwithMorse(flax.linen.Module):
             The n_atoms contributions to the energy from the Morse part of the
             potential.
         """
-        radii = center_at_atoms(positions, cell)[1]
+        delta, radii, all_types = self.descriptor_generator.center_at_atoms(
+            positions, types, cell
+        )
         morse_contributions = self.morse.calc_atomic_energies(
-            radii, types, types
+            radii, types, all_types
         )
         return (types >= 0) * morse_contributions
 
@@ -861,9 +865,11 @@ class NeuralILwithMorse(flax.linen.Module):
             The n_atoms contributions to the energy from the Morse part of the
             potential.
         """
-        radii = center_at_points(all_positions, some_positions, cell)[1]
+        delta, radii, sc_types = self.descriptor_generator.center_at_points(
+            all_positions, some_positions, all_types, cell
+        )[1]
         morse_contributions = self.morse.calc_atomic_energies(
-            radii, some_types, all_types
+            radii, some_types, sc_types
         )
         return (some_types >= 0) * morse_contributions
 

@@ -59,6 +59,25 @@ class Committee(flax.linen.Module):
             self.neuralil, descriptors, types
         )
 
+    def calc_some_atomic_energies(
+        self, some_positions, some_types, all_positions, all_types, cell
+    ):
+        some_descriptors = self.neuralil.partial_descriptor_generator(
+            all_positions, all_types, some_positions, cell
+        )
+        return (some_types >= 0)[
+            jnp.newaxis, :
+        ] * self.calc_atomic_energies_from_descriptors(
+            self.neuralil, some_descriptors, some_types
+        )
+
+    def calc_some_atomic_energies_and_average(
+        self, some_positions, some_types, all_positions, all_types, cell
+    ):
+        return self.calc_some_atomic_energies(
+            some_positions, some_types, all_positions, all_types, cell
+        ).mean(axis=0)
+
     def calc_potential_energy(self, positions, types, cell):
         contributions = self.calc_atomic_energies(positions, types, cell)
         # Note the change of axis to account for the prepending of the
@@ -107,6 +126,14 @@ class CommitteewithMorse(flax.linen.Module):
             split_rngs={"params": True},
             axis_size=self.n_models,
         )
+        self.calc_some_morse_energies = flax.linen.vmap(
+            NeuralILwithMorse.calc_some_morse_energies,
+            in_axes=(None, None, None, None, None),
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+            axis_size=self.n_models,
+        )
+
         self._calc_jacobian = jax.jacrev(self.calc_potential_energy, argnums=0)
 
     def calc_atomic_energies(self, positions, types, cell):
@@ -123,6 +150,34 @@ class CommitteewithMorse(flax.linen.Module):
         return (types >= 0)[jnp.newaxis, :] * (
             nn_contributions + morse_contributions
         )
+
+    def calc_some_atomic_energies(
+        self, some_positions, some_types, all_positions, all_types, cell
+    ):
+        some_descriptors = self.neuralil.partial_descriptor_generator(
+            all_positions, all_types, some_positions, cell
+        )
+        nn_contributions = self.calc_atomic_energies_from_descriptors(
+            self.neuralil, some_descriptors, some_types
+        )
+        morse_contributions = self.calc_some_morse_energies(
+            self.neuralil,
+            some_positions,
+            some_types,
+            all_positions,
+            all_types,
+            cell,
+        )
+        return (some_types >= 0)[jnp.newaxis, :] * (
+            nn_contributions + morse_contributions
+        )
+
+    def calc_some_atomic_energies_and_average(
+        self, some_positions, some_types, all_positions, all_types, cell
+    ):
+        return self.calc_some_atomic_energies(
+            some_positions, some_types, all_positions, all_types, cell
+        ).mean(axis=0)
 
     def calc_potential_energy(self, positions, types, cell):
         contributions = self.calc_atomic_energies(positions, types, cell)

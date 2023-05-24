@@ -16,7 +16,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="NeuralIL",
-    version="0.6.uncertainties",
+    version="0.6",
     description="A Differentiable Neural-Network Force Field",
     author="The NeuralIL contributors",
     author_email="jesus.carrete.montana@tuwien.ac.at",
@@ -27,16 +27,12 @@ setup(
         "numpy",
         "scipy",
         "tqdm",
-        "colorama",
         "matplotlib",
         "ase",
-        "jax==0.3.21",
-        "jaxlib==0.3.20",
-        "flax==0.6.3",
+        "jax",
+        "jaxlib",
+        "flax",
         "optax",
         "learned_optimization",
-        "h5py",
-        "MDAnalysis",
-        "jax_md>=0.2.5",
     ],
 )

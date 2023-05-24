@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 from typing import List
 
 import jax
@@ -237,16 +238,22 @@ def build_Legendre_polynomials(max_l):
 
 
 def center_at_point(
-    coordinates: jnp.ndarray, reference: jnp.ndarray, cell_size: jnp.ndarray
+    coordinates: jnp.ndarray,
+    reference: jnp.ndarray,
+    types: jnp.ndarray,
+    cell_size: jnp.ndarray,
 ):
     delta = coordinates - reference
     delta -= jnp.round(delta @ jnp.linalg.pinv(cell_size)) @ cell_size
     radius = _sqrt(jnp.sum(delta**2, axis=-1))
-    return (delta, radius)
+    return (delta, radius, types)
 
 
 def center_at_points(
-    coordinates: jnp.ndarray, centers: jnp.ndarray, cell_size: jnp.ndarray
+    coordinates: jnp.ndarray,
+    centers: jnp.ndarray,
+    types: jnp.ndarray,
+    cell_size: jnp.ndarray,
 ):
     delta = coordinates - centers[:, jnp.newaxis, :]
     delta -= jnp.einsum(
@@ -255,10 +262,12 @@ def center_at_points(
         cell_size,
     )
     radius = _sqrt(jnp.sum(delta**2, axis=-1))
-    return (delta, radius)
+    return (delta, radius, types)
 
 
-def center_at_atoms(coordinates: jnp.ndarray, cell_size: jnp.ndarray):
+def center_at_atoms(
+    coordinates: jnp.ndarray, types: jnp.ndarray, cell_size: jnp.ndarray
+):
     delta = coordinates - coordinates[:, jnp.newaxis, :]
     delta -= jnp.einsum(
         "ijk,kl",
@@ -266,11 +275,78 @@ def center_at_atoms(coordinates: jnp.ndarray, cell_size: jnp.ndarray):
         cell_size,
     )
     radius = _sqrt(jnp.sum(delta**2, axis=-1))
-    return (delta, radius)
+    return (delta, radius, types)
 
 
-@jax.jit
-def _get_max_number_of_neighbors(coordinates, types, cutoff, cell_size):
+def gen_supercell(
+    coordinates: jnp.ndarray,
+    types: jnp.ndarray,
+    cell: jnp.ndarray,
+    sc_a: int,
+    sc_b: int,
+    sc_c: int,
+):
+    M = sc_a * sc_b * sc_c
+    n = coordinates.shape[0]
+    tile_coordinates = jnp.tile(coordinates, (M, 1))
+    super_types = jnp.tile(types, M)
+    grid = jnp.indices((sc_a, sc_b, sc_c)).reshape(3, -1).T
+    translations = jnp.dot(grid, cell)
+    tile_translations = jnp.repeat(translations, n, axis=0)
+    super_coordinates = tile_coordinates + tile_translations
+    super_cell = jnp.multiply(jnp.array([sc_a, sc_b, sc_c]), cell)
+    return super_coordinates, super_types, super_cell
+
+
+def create_sc_center_functions(sc_a: int, sc_b: int, sc_c: int):
+    def sc_center_at_point(
+        coordinates: jnp.ndarray,
+        reference: jnp.ndarray,
+        types: jnp.ndarray,
+        cell_size: jnp.ndarray,
+    ):
+        super_coordinates, super_types, super_cell = gen_supercell(
+            coordinates, types, cell_size, sc_a, sc_b, sc_c
+        )
+        return center_at_point(
+            super_coordinates, reference, super_types, super_cell
+        )
+
+    def sc_center_at_points(
+        coordinates: jnp.ndarray,
+        centers: jnp.ndarray,
+        types: jnp.ndarray,
+        cell_size: jnp.ndarray,
+    ):
+        super_coordinates, super_types, super_cell = gen_supercell(
+            coordinates, types, cell_size, sc_a, sc_b, sc_c
+        )
+        return center_at_points(
+            super_coordinates, centers, super_types, super_cell
+        )
+
+    def sc_center_at_atoms(coordinates, types, cell_size):
+        super_coordinates, super_types, super_cell = gen_supercell(
+            coordinates, types, cell_size, sc_a, sc_b, sc_c
+        )
+        delta = super_coordinates - coordinates[:, jnp.newaxis, :]
+        delta -= jnp.einsum(
+            "ijk,kl",
+            jnp.round(
+                jnp.einsum("ijk,kl", delta, jnp.linalg.pinv(super_cell))
+            ),
+            super_cell,
+        )
+        radius = _sqrt(jnp.sum(delta**2, axis=-1))
+        return (delta, radius, super_types)
+
+    return (sc_center_at_point, sc_center_at_points, sc_center_at_atoms)
+
+
+@functools.partial(jax.jit, static_argnames=["sc_a", "sc_b", "sc_c"])
+def _get_max_number_of_neighbors(
+    coordinates, types, cutoff, cell_size, sc_a, sc_b, sc_c
+):
     """
     Return the maximum number of neighbors within a cutoff in a configuration.
 
@@ -284,27 +360,48 @@ def _get_max_number_of_neighbors(coordinates, types, cutoff, cell_size):
         cell_size: Unit cell vector matrix (3x3) if the system is periodic. If
             it is not periodic along one or more directions, signal that fact
             with one of more zero vectors.
+        sc_a: Supercell dimension along the first crystallographic axis. Used
+            if the cutoff radius is too large to fill in the original cell.
+        sc_b: Supercell dimension along the second crystallographic axis. Used
+            if the cutoff radius is too large to fill in the original cell.
+        sc_c: Supercell dimension along the third crystallographic axis. Used
+            if the cutoff radius is too large to fill in the original cell.
 
     Returns:
         The maximum number of atoms within a sphere of radius cutoff around
         another atom in the configuration provided.
     """
+    if sc_a != 1 or sc_b != 1 or sc_c != 1:
+        super_coordinates, super_types, super_cell = gen_supercell(
+            coordinates, types, cell_size, sc_a, sc_b, sc_c
+        )
+    else:
+        super_coordinates = coordinates
+        super_types = types
+        super_cell = cell_size
+
     cutoff2 = cutoff * cutoff
 
-    delta = coordinates - coordinates[:, jnp.newaxis, :]
+    delta = super_coordinates - coordinates[:, jnp.newaxis, :]
     delta -= jnp.einsum(
         "ijk,kl",
         jnp.round(jnp.einsum("ijk,kl", delta, jnp.linalg.pinv(cell_size))),
-        cell_size,
+        super_cell,
     )
     distances2 = jnp.sum(delta**2, axis=2)
-    n_neighbors = jnp.logical_and(types >= 0, distances2 < cutoff2).sum(axis=1)
+    n_neighbors = jnp.logical_and(super_types >= 0, distances2 < cutoff2).sum(
+        axis=1
+    )
     return jnp.squeeze(jnp.maximum(0, n_neighbors.max() - 1))
 
 
-def get_max_number_of_neighbors(coordinates, types, cutoff, cell_size):
+def get_max_number_of_neighbors(
+    coordinates, types, cutoff, cell_size, sc_a=1, sc_b=1, sc_c=1
+):
     return int(
-        _get_max_number_of_neighbors(coordinates, types, cutoff, cell_size)
+        _get_max_number_of_neighbors(
+            coordinates, types, cutoff, cell_size, sc_a, sc_b, sc_c
+        )
     )
 
 
@@ -314,12 +411,19 @@ class PowerSpectrumGenerator:
     initialized with the maximum n and the number of atom types, as well as the
     maximum allowed number of neighbors. If a calculation involves denser
     environments, the error will be silently ignored. Use
-    get_max_number_of_neighbors to check this condition if needed.
-    Atoms (Administratium) with the type -1 are ignored.
+    get_max_number_of_neighbors to check this condition if needed. A supercell
+    matrix can be provided if the cutoff sphere around any of the atoms is
+    expected to be too large to fit in the cell.
+    Atoms with the type -1 (Administratium) are ignored.
     """
 
     def __init__(
-        self, max_order: int, cutoff: float, n_types: int, max_neighbors: int
+        self,
+        max_order: int,
+        cutoff: float,
+        n_types: int,
+        max_neighbors: int,
+        supercell_diag: List[int] = [1, 1, 1],
     ):
         self._n_max = max_order
         self._r_c = cutoff
@@ -337,6 +441,22 @@ class PowerSpectrumGenerator:
         self._triu_indices = jnp.triu_indices(self._n_types)
         # Number of angular descriptors for each l.
         self._degeneracies = jnp.arange(self._n_max + 1, 0, -1)
+        # Supercell expansion to be used when computing descriptors.
+        self.sc_a = supercell_diag[0]
+        self.sc_b = supercell_diag[1]
+        self.sc_c = supercell_diag[2]
+        if supercell_diag == [1, 1, 1]:
+            (
+                self.center_at_point,
+                self.center_at_points,
+                self.center_at_atoms,
+            ) = (center_at_point, center_at_points, center_at_atoms)
+        else:
+            (
+                self.center_at_point,
+                self.center_at_points,
+                self.center_at_atoms,
+            ) = create_sc_center_functions(self.sc_a, self.sc_b, self.sc_c)
 
     def __len__(self):
         return self._n_desc
@@ -357,7 +477,9 @@ class PowerSpectrumGenerator:
         a_types: jnp.ndarray,
         cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
-        deltas, radii = center_at_atoms(coordinates, cell_size)
+        deltas, radii, a_types = self.center_at_atoms(
+            coordinates, a_types, cell_size
+        )
         weights = jax.nn.one_hot(a_types, self._n_types)
         nruter = jax.lax.map(
             jax.checkpoint(
@@ -376,8 +498,8 @@ class PowerSpectrumGenerator:
         some_coordinates: jnp.array,
         cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
-        deltas, radii = center_at_points(
-            all_coordinates, some_coordinates, cell_size
+        deltas, radii, all_types = self.center_at_points(
+            all_coordinates, some_coordinates, all_types, cell_size
         )
         weights = jax.nn.one_hot(all_types, self._n_types)
         nruter = jax.lax.map(
@@ -408,8 +530,8 @@ class PowerSpectrumGenerator:
         center: jnp.ndarray,
         cell_size: jnp.ndarray,
     ) -> jnp.ndarray:
-        deltas, radii = center_at_point(
-            coordinates, center, cell_size=cell_size
+        deltas, radii, a_types = self.center_at_point(
+            coordinates, center, a_types, cell_size=cell_size
         )
         weights = jax.nn.one_hot(a_types, self._n_types)
         return self._process_center(deltas, radii, a_types, weights)

@@ -33,8 +33,6 @@ from learned_optimization.research.general_lopt import prefab
 
 __all__ = [
     "create_log_cosh",
-    "create_one_cycle_minimizer",
-    "reset_one_cycle_minimizer",
     "create_velo_minimizer",
     "create_training_step",
     "create_training_epoch",
@@ -72,9 +70,30 @@ def create_log_cosh(parameter):
     return nruter
 
 
-def _logcosh(x):
-    "More stable implementation of log(cosh(x))"
-    return jax.nn.softplus(2.0 * x) - jnp.log(2) - x
+# Adapted from the implementation in TensorFlow Probability.
+@jax.custom_jvp
+def _log_cosh(x):
+    """Numerically stable implementation of log(cosh(x))."""
+    dtype = x.dtype
+    bound = 45.0 * jnp.power(jnp.finfo(dtype).tiny, 1.0 / 6.0)
+    abs_x = jnp.abs(x)
+    mask = abs_x <= bound
+    safe_argument = jnp.where(mask, 1.0, abs_x)
+    logcosh = abs_x + jax.nn.softplus(-2.0 * safe_argument) - jnp.log(2)
+    return jnp.where(
+        mask,
+        jnp.exp(jnp.log(abs_x) + jnp.log1p(-jnp.square(abs_x) / 6.0)),
+        logcosh,
+    )
+
+
+@_log_cosh.defjvp
+def _log_cosh_jvp(primals, tangents):
+    (x,) = primals
+    (xdot,) = tangents
+    primal_out = _log_cosh(x)
+    tangent_out = jnp.tanh(x) * xdot
+    return (primal_out, tangent_out)
 
 
 def create_heteroscedastic_log_cosh(scale):
@@ -98,7 +117,7 @@ def create_heteroscedastic_log_cosh(scale):
         raise ValueError("the scale must be positive")
 
     def nruter(x, sigma):
-        return _logcosh(jnp.pi * x / 2.0 / sigma / scale) + jnp.log(sigma)
+        return _log_cosh(jnp.pi * x / 2.0 / sigma / scale) + jnp.log(sigma)
 
     return nruter
 
@@ -146,9 +165,9 @@ def create_one_cycle_minimizer(
     )
     # Integrate the training schedule in the optimizer.
     # Note the minus sign, required for gradient **descent**.
-    # ADAM with training schedule
+    # Yogi with training schedule
     optimizer = optax.chain(
-        optax.scale_by_adam(),
+        optax.scale_by_yogi(),
         optax.scale_by_schedule(training_schedule),
         optax.scale(-1.0),
     )
@@ -315,6 +334,11 @@ def create_training_step(model, optimizer, calc_loss_contribution):
                     types,
                     cell,
                     method=model.calc_potential_energy_and_forces,
+                )
+                pred_forces = jnp.where(
+                    jnp.expand_dims(types, axis=-1) >= 0,
+                    pred_forces,
+                    jnp.zeros(3),
                 )
                 return calc_loss_contribution(
                     pred_energy, pred_forces, obs_energy, obs_forces, types
@@ -586,6 +610,11 @@ def _create_individual_validation_calculator(model, validation_statistics):
             types,
             cell,
             method=model.calc_potential_energy_and_forces,
+        )
+        pred_forces = jnp.where(
+            jnp.expand_dims(types, axis=-1) >= 0,
+            pred_forces,
+            jnp.zeros(3),
         )
         return {
             k: validation_statistics[k].map_function(

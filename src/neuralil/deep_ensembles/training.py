@@ -90,6 +90,16 @@ def create_training_step(model, optimizer, calc_loss_contribution):
                     cell,
                     method=model.calc_all_results,
                 )
+                pred_forces = jnp.where(
+                    jnp.expand_dims(types, axis=-1) >= 0,
+                    pred_forces,
+                    jnp.zeros(3),
+                )
+                sigma2_forces = jnp.where(
+                    jnp.expand_dims(types, axis=-1) >= 0,
+                    sigma2_forces,
+                    jnp.zeros(3),
+                )
                 loss = jax.vmap(
                     calc_loss_contribution,
                     in_axes=(0, 0, None, 0, 0, None, None),
@@ -202,6 +212,16 @@ def _create_individual_validation_calculator(model, validation_statistics):
     def nruter(model_params, positions, types, cell, energy, forces):
         (pred_energy, pred_forces, sigma2_energy, sigma2_forces) = model.apply(
             model_params, positions, types, cell, method=model.calc_all_results
+        )
+        pred_forces = jnp.where(
+            jnp.expand_dims(types, axis=-1) >= 0,
+            pred_forces,
+            jnp.zeros(3),
+        )
+        sigma2_forces = jnp.where(
+            jnp.expand_dims(types, axis=-1) >= 0,
+            sigma2_forces,
+            jnp.zeros(3),
         )
         return {
             k: jax.vmap(

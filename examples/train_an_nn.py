@@ -23,18 +23,18 @@ from neuralil.bessel_descriptors import (
     PowerSpectrumGenerator,
     get_max_number_of_neighbors,
 )
-from neuralil.model import NeuralIL, NeuralILModelInfo, ResNetCore
+from neuralil.model import NeuralILModelInfo, NeuralILwithMorse, ResNetCore
 from neuralil.training import *
 from neuralil.utilities import *
 
-# Parameters for this run.
-USE_RANDOM_RUN_SEED = True
+# Predefined parameters for this run.
+TRAINING_FRACTION = 0.9
 R_CUT = 3.5
 N_MAX = 4
 EMBED_D = 2
 WEIGHT_ENERGY = 0.5
 
-N_EPOCHS = 101
+N_EPOCHS = 21
 N_BATCH = 8
 N_EVAL_BATCH = 32
 
@@ -43,20 +43,10 @@ LOG_COSH_PARAMETER_ENERGY = 0.020  # In eV / atom
 
 CORE_WIDTHS = [64, 32, 16]
 
-ADAM_MINIMIZER = False
-
-if ADAM_MINIMIZER:
-    MAX_LEARNING_RATE = 1e-2
-    MIN_LEARNING_RATE = 1e-3
-    FIN_LEARNING_RATE = 1e-5
-
-# Create a random seed or use the same one as in the manuscript.
-if USE_RANDOM_RUN_SEED:
-    run_seed = draw_urandom_int32()
-else:
-    run_seed = 31337
+# Generate a random seed and the associated code
+run_seed = draw_urandom_int32()
 run_seed_str = f"{run_seed:0X}"
-instance_code = f"{run_seed_str}"
+instance_code = f"VELO_{run_seed_str}"
 rng = jax.random.PRNGKey(run_seed)
 
 # Create a map from element names to integers. They must start at zero
@@ -68,96 +58,68 @@ sorted_elements = sorted(["C", "H", "O", "N"])
 symbol_map = {s: i for i, s in enumerate(sorted_elements)}
 n_types = len(symbol_map)
 
+# Read the data from a JSON file. In this case it is a custom design,
+# but an ASE database is another common choice.
+cells = []
+positions = []
+energies = []
+forces = []
+print("- Reading the JSON file")
+with open(
+    (pathlib.Path(__file__).parent / "configurations.json").resolve(), "r"
+) as json_f:
+    for line in json_f:
+        json_data = json.loads(line)
+        cells.append(jnp.diag(jnp.array(json_data["Cell-Size"])))
+        positions.append(json_data["Positions"])
+        energies.append(json_data["Energy"])
+        forces.append(json_data["Forces"])
+print("- Done")
+n_configurations = len(positions)
+
 # The atom types are the same in every configuration and not stored in the file.
 type_cation = ["N", "H", "H", "H", "C", "H", "H", "C", "H", "H", "H"]
 type_anion = ["N", "O", "O", "O"]
-
-# Load the training and validation data.
-cells_train = []
-positions_train = []
-energies_train = []
-forces_train = []
-print("- Reading the training JSON file")
-with open(
-    (
-        pathlib.Path(__file__).resolve().parent.parent
-        / "data_sets"
-        / "EAN"
-        / "training_original.json"
-    ).resolve(),
-    "r",
-) as json_f:
-    for line in json_f:
-        json_data = json.loads(line)
-        cells_train.append(jnp.diag(jnp.array(json_data["Cell-Size"])))
-        positions_train.append(json_data["Positions"])
-        energies_train.append(json_data["Energy"])
-        forces_train.append(json_data["Forces"])
-print("- Done")
-n_train = len(positions_train)
-positions_train = jnp.asarray(positions_train)
-cells_train = jnp.asarray(cells_train)
-energies_train = jnp.asarray(energies_train)
-forces_train = jnp.asarray(forces_train)
-
-n_pair = len(positions_train[0]) // (len(type_anion) + len(type_cation))
+n_pair = len(positions[0]) // (len(type_anion) + len(type_cation))
 types = n_pair * type_cation + n_pair * type_anion
 unique_types = sorted(set(types))
+types = [[symbol_map[i] for i in types]] * n_configurations
 
-types_train = jnp.asarray([[symbol_map[i] for i in types]] * n_train)
+# Shuffle the data.
+rng, shuffler_rng = jax.random.split(rng)
+shuffle = create_array_shuffler(shuffler_rng)
+cells = shuffle(cells)
+positions = shuffle(positions)
+energies = shuffle(energies)
+types = shuffle(types)
+forces = shuffle(forces)
 
-cells_validate = []
-positions_validate = []
-energies_validate = []
-forces_validate = []
-print("- Reading the validation JSON file")
-with open(
-    (
-        pathlib.Path(__file__).resolve().parent.parent
-        / "data_sets"
-        / "EAN"
-        / "validation_original.json"
-    ).resolve(),
-    "r",
-) as json_f:
-    for line in json_f:
-        json_data = json.loads(line)
-        cells_validate.append(jnp.diag(jnp.array(json_data["Cell-Size"])))
-        positions_validate.append(json_data["Positions"])
-        energies_validate.append(json_data["Energy"])
-        forces_validate.append(json_data["Forces"])
-print("- Done")
-n_validate = len(positions_validate)
-positions_validate = jnp.asarray(positions_validate)
-cells_validate = jnp.asarray(cells_validate)
-energies_validate = jnp.asarray(energies_validate)
-forces_validate = jnp.asarray(forces_validate)
-types_validate = jnp.asarray([[symbol_map[i] for i in types]] * n_validate)
-
-n_configurations = n_train + n_validate
+# Extract training and validation subsets.
+n_train = round(n_configurations * TRAINING_FRACTION)
+n_validate = n_configurations - n_train
 
 print(f"- {n_configurations} configurations are available")
 print(f"\t- {n_train} will be used for training")
 print(f"\t- {n_validate} will be used for validation")
 
 
+def split_array(in_array):
+    "Split an array in training and validation sections."
+    return jnp.split(in_array, (n_train, n_train + n_validate))[:2]
+
+
+cells_train, cells_validate = split_array(cells)
+positions_train, positions_validate = split_array(positions)
+types_train, types_validate = split_array(types)
+energies_train, energies_validate = split_array(energies)
+forces_train, forces_validate = split_array(forces)
+
 # Compute the maximum number of neighbors across all configurations.
 max_neighbors = max(
     [
         get_max_number_of_neighbors(p, t, R_CUT, c)
-        for p, t, c in zip(positions_train, types_train, cells_train)
+        for p, t, c in zip(positions, types, cells)
     ]
-)
-max_neighbors = max(
-    max_neighbors,
-    max(
-        [
-            get_max_number_of_neighbors(p, t, R_CUT, c)
-            for p, t, c in zip(
-                positions_validate, types_validate, cells_validate
-            )
-        ]
-    ),
 )
 
 print("- Maximum number of neighbors that must be considered: ", max_neighbors)
@@ -171,35 +133,17 @@ descriptor_generator = PowerSpectrumGenerator(
 # on the kind of model used.
 core_model = ResNetCore(CORE_WIDTHS)
 
-# dynamics_model = NeuralILwithMorse(
-#     n_types,
-#     EMBED_D,
-#     R_CUT,
-#     descriptor_generator.process_data,
-#     descriptor_generator.process_some_data,
-#     core_model,
-# )
-
-dynamics_model = NeuralIL(
+dynamics_model = NeuralILwithMorse(
     n_types,
     EMBED_D,
     R_CUT,
-    descriptor_generator.process_data,
+    descriptor_generator,
     descriptor_generator.process_some_data,
     core_model,
 )
 
-
 # Create the minimizer.
-if ADAM_MINIMIZER:
-    optimizer = create_one_cycle_minimizer(
-        n_train // N_BATCH,
-        MIN_LEARNING_RATE,
-        MAX_LEARNING_RATE,
-        FIN_LEARNING_RATE,
-    )
-else:
-    optimizer = create_velo_minimizer(n_train // N_BATCH, N_EPOCHS)
+optimizer = create_velo_minimizer(n_train // N_BATCH, N_EPOCHS)
 
 # The model and the optimizer are stateless objects. Initialize the associated
 # state for both. Note that the model initialization has a random component, but
@@ -288,13 +232,11 @@ validation_step = create_validation_step(
     N_EVAL_BATCH,
 )
 
-PICKLE_FILE = f"EAN_params_{instance_code}.pkl"
+PICKLE_FILE = f"model_params_neuralil_{instance_code}.pkl"
 
 min_mae = jnp.inf
 min_rmse = jnp.inf
 for i_epoch in range(N_EPOCHS):
-    if ADAM_MINIMIZER:
-        optimizer_state = reset_one_cycle_minimizer(optimizer_state)
     # Run a full epoch.
     (optimizer_state, model_params) = training_epoch(
         optimizer_state, model_params

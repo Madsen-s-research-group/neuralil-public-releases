@@ -92,6 +92,11 @@ def create_training_step(model, optimizer, calc_loss_contribution):
                     cell,
                     method=model.calc_potential_energy_and_forces,
                 )
+                pred_forces = jnp.where(
+                    jnp.expand_dims(types, axis=-1) >= 0,
+                    pred_forces,
+                    jnp.zeros(3),
+                )
                 loss = jax.vmap(
                     calc_loss_contribution, in_axes=(0, None, 0, None, None)
                 )(pred_energy, obs_energy, pred_forces, obs_forces, types)
@@ -199,6 +204,11 @@ def _create_individual_validation_calculator(model, validation_statistics):
             types,
             cell,
             method=model.calc_potential_energy_and_forces,
+        )
+        pred_forces = jnp.where(
+            jnp.expand_dims(types, axis=-1) >= 0,
+            pred_forces,
+            jnp.zeros(3),
         )
         return {
             k: jax.vmap(

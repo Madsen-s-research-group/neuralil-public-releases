@@ -31,9 +31,9 @@ from neuralil.model import ResNetDense, ResNetIdentity, pairwise
 # generate estimates of the uncertainties on energies and forces. Therefore,
 # the model is restructured into a feature extractor and several heads.
 # The changes with respect to the base NeuralIL models are more extensive than
-# in the case of the committee.
-# Please see the docstrings for the homoscedastic version of each function for
-# more information.
+# in the case of the plain ensembles.
+# TODO: Improve the documentation.
+# TODO: Reuse code from the plain ensembles whenever possible.
 
 
 class FeatureExtractor(flax.linen.Module):
