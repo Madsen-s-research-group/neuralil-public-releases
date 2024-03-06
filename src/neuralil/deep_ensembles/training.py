@@ -27,9 +27,14 @@ import jax.random
 import jax.tree_util
 import optax
 import tqdm
-from learned_optimization.optimizers.opt_to_optax import (
-    GradientTransformationWithExtraArgs,
-)
+try:
+    from learned_optimization.optimizers.opt_to_optax import (
+        GradientTransformationWithExtraArgs,
+    )
+except ImportError:
+    from optax import (
+        GradientTransformationExtraArgs as GradientTransformationWithExtraArgs,
+    )
 
 from neuralil.training import (
     BatchedIterator,
@@ -57,9 +62,7 @@ __all__ = [
 
 
 def get_n_models(model_params):
-    return model_params["params"]["h_neuralil"]["energy_denormalizer"][
-        "bias"
-    ].shape[0]
+    return model_params["params"]["h_neuralil"]["energy_denormalizer"]["bias"].shape[0]
 
 
 def create_training_step(model, optimizer, calc_loss_contribution):
@@ -91,14 +94,12 @@ def create_training_step(model, optimizer, calc_loss_contribution):
                     method=model.calc_all_results,
                 )
                 pred_forces = jnp.where(
-                    jnp.expand_dims(types, axis=-1) >= 0,
+                    jnp.expand_dims(types, axis=(0, -1)) >= 0,
                     pred_forces,
                     jnp.zeros(3),
                 )
                 sigma2_forces = jnp.where(
-                    jnp.expand_dims(types, axis=-1) >= 0,
-                    sigma2_forces,
-                    jnp.zeros(3),
+                    jnp.expand_dims(types, axis=0) >= 0, sigma2_forces, 0.0
                 )
                 loss = jax.vmap(
                     calc_loss_contribution,
@@ -214,14 +215,12 @@ def _create_individual_validation_calculator(model, validation_statistics):
             model_params, positions, types, cell, method=model.calc_all_results
         )
         pred_forces = jnp.where(
-            jnp.expand_dims(types, axis=-1) >= 0,
+            jnp.expand_dims(types, axis=(0, -1)) >= 0,
             pred_forces,
             jnp.zeros(3),
         )
         sigma2_forces = jnp.where(
-            jnp.expand_dims(types, axis=-1) >= 0,
-            sigma2_forces,
-            jnp.zeros(3),
+            jnp.expand_dims(types, axis=0) >= 0, sigma2_forces, 0.0
         )
         return {
             k: jax.vmap(
@@ -234,9 +233,7 @@ def _create_individual_validation_calculator(model, validation_statistics):
     return nruter
 
 
-def _create_batch_validation_calculator(
-    individual_calculator, validation_statistics
-):
+def _create_batch_validation_calculator(individual_calculator, validation_statistics):
     vectorized_calculator = jax.vmap(
         individual_calculator, in_axes=[None, 0, 0, 0, 0, 0]
     )

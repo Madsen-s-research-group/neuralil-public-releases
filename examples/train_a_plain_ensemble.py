@@ -30,8 +30,8 @@ from neuralil.model import (
     ResNetCore,
     update_energy_offset,
 )
-from neuralil.committees.model import CommitteewithMorse
-from neuralil.committees.training import *
+from neuralil.plain_ensembles.model import PlainEnsemblewithMorse
+from neuralil.plain_ensembles.training import *
 from neuralil.training import (
     create_elogcosh_validation_statistic,
     create_flogcosh_validation_statistic,
@@ -156,7 +156,7 @@ individual_model = NeuralILwithMorse(
     descriptor_generator.process_some_data,
     core_model,
 )
-dynamics_model = CommitteewithMorse(individual_model, N_ENSEMBLE)
+dynamics_model = PlainEnsemblewithMorse(individual_model, N_ENSEMBLE)
 
 # Create the minimizer.
 optimizer = create_velo_minimizer(n_train // N_BATCH, N_EPOCHS)

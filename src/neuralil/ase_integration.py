@@ -121,18 +121,7 @@ class NeuralILASECalculator(Calculator):
             positions,
             types,
             cell,
-            method=self.model.calc_some_atomic_energies_and_average,
-        )
-
-    def _individual_energy_worker(self, one_p, one_t, positions, types, cell):
-        return jnp.squeeze(
-            self._serial_energy_worker(
-                one_p[jnp.newaxis, ...],
-                one_t[jnp.newaxis, ...],
-                positions,
-                types,
-                cell,
-            )
+            method=self.model.calc_some_atomic_energies,
         )
 
     def _calc_atomic_energies(self, p, t, c):

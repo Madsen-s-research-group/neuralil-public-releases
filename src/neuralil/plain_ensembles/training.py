@@ -26,9 +26,14 @@ import jax.random
 import jax.tree_util
 import optax
 import tqdm
-from learned_optimization.optimizers.opt_to_optax import (
-    GradientTransformationWithExtraArgs,
-)
+try:
+    from learned_optimization.optimizers.opt_to_optax import (
+        GradientTransformationWithExtraArgs,
+    )
+except ImportError:
+    from optax import (
+        GradientTransformationExtraArgs as GradientTransformationWithExtraArgs,
+    )
 
 from neuralil.training import (
     BatchedIterator,
@@ -38,7 +43,7 @@ from neuralil.training import (
     frmse_validation_statistic,
 )
 
-# This module contains code specific to the training step of a committee
+# This module contains code specific to the training step of a "plain" ensemble
 # of NeuralIL models. See training.py for details about the interface.
 
 
@@ -57,7 +62,7 @@ __all__ = [
 
 
 def get_n_models(model_params):
-    """Return the number of models contained in a committee.
+    """Return the number of models contained in a plain ensemble.
 
     Args:
         model_params: The tree of parameters of the full ensemble including

@@ -24,9 +24,14 @@ import jax.random
 import jax.tree_util
 import optax
 import tqdm
-from learned_optimization.optimizers.opt_to_optax import (
-    GradientTransformationWithExtraArgs,
-)
+try:
+    from learned_optimization.optimizers.opt_to_optax import (
+        GradientTransformationWithExtraArgs,
+    )
+except ImportError:
+    from optax import (
+        GradientTransformationExtraArgs as GradientTransformationWithExtraArgs,
+    )
 from learned_optimization.research.general_lopt import prefab
 
 # This module contains code specific to the training step.
